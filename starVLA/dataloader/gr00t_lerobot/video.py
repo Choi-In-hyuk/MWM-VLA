@@ -105,6 +105,24 @@ def get_frames_by_timestamps(
             video_path, device="cpu", dimension_order="NHWC", num_ffmpeg_threads=0
         )
         return decoder.get_frames_played_at(seconds=timestamps).data.numpy()
+    elif video_backend == "pyav":
+        container = av.open(video_path)
+        stream = container.streams.video[0]
+        # decode all frames once, build (pts_seconds, frame_ndarray) pairs.
+        # AV1 mp4s from LeRobot exports aren't seekable by decord; PyAV handles them.
+        time_base = float(stream.time_base) if stream.time_base is not None else 1.0
+        decoded = []
+        for f in container.decode(stream):
+            pts = f.pts * time_base if f.pts is not None else len(decoded) / max(float(stream.average_rate or 1), 1.0)
+            decoded.append((pts, f.to_ndarray(format="rgb24")))
+        container.close()
+        if not decoded:
+            raise ValueError(f"No frames decoded from {video_path}")
+        pts_arr = np.asarray([d[0] for d in decoded])
+        # nearest-pts lookup for each requested timestamp
+        ts = np.asarray(timestamps).reshape(-1, 1)
+        idx = np.abs(pts_arr[None, :] - ts).argmin(axis=1)
+        return np.stack([decoded[i][1] for i in idx], axis=0)
     elif video_backend == "opencv":
         # Open the video file
         cap = cv2.VideoCapture(video_path, **video_backend_kwargs)

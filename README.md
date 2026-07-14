@@ -75,13 +75,15 @@ every control cycle.
 
 LIBERO-10 is the hardest suite (long-horizon, multi-step).
 
-| Model | Encoder | Inference WM | Success |
+| Model | Encoder | Predictor input | Success |
 |---|---|---|---|
-| V1 — per-frame + inverse dynamics | DINO (frozen) | ✅ | 20% |
-| V2 — endpoint + diffusion | DINO (frozen) | ✅ | 84.8% |
-| **V2 + Qwen-LoRA** *(best)* | DINO (frozen) | ✅ | **88.4%** |
-| VLA-WM — V2 + JEPA-DINO + LoRA | DINO (JEPA-trained) | ✅ | 84.8% |
-| *(ref)* base VLA-JEPA | V-JEPA | ❌ (dropped) | ~90%+ |
+| V1 — per-frame + inverse dynamics | DINO (frozen) | current frame | 20% |
+| V2 — endpoint + diffusion | DINO (frozen) | current frame | 84.8% |
+| V2 + Qwen-LoRA | DINO (frozen) | current frame | 88.4% |
+| VLA-WM — V2 + JEPA-DINO + LoRA | DINO (JEPA-trained) | current frame | 84.8% |
+| V2 + Qwen-LoRA, **libero_all 4-suite training** | DINO (frozen) | current frame | 91.2% |
+| **Streaming v2 — 2-frame world model** *(best)* | DINO (frozen) | **past (t−7) + present (t)** | **93.2%** |
+| *(ref)* base VLA-JEPA | V-JEPA | — | 95.8% |
 
 *Single-seed; LIBERO action sampling is non-deterministic (≈±2% at 500 episodes).*
 
@@ -94,33 +96,42 @@ LIBERO-10 is the hardest suite (long-horizon, multi-step).
 - **JEPA-training the encoder did *not* help here** (84.8%). The encoder fits the
   prediction task well (`pred_cos` ≈ 0.98, `s0_std` stable ~1.4 → no collapse),
   but the learned latent space did not translate into better actions for this
-  single seed — a case where a better *representation* objective does not improve
-  the *policy*. Whether this is a real regression or seed noise needs multi-seed
-  evaluation. The best configuration remains **V2 + Qwen-LoRA (88.4%)**, reaching
-  near base-VLA-JEPA quality **with a lightweight, inference-time world model**.
+  single seed.
+- **Adding the past frame is the largest single jump** (91.2% → 93.2%, +2.0%p
+  over the strongest baseline at the same training budget). The predictor now
+  sees both `t−7` and `t` DINO latents (with per-frame time embedding) and
+  predicts `t+7`. No SSM state carry — every replan starts from `states=None`
+  so the train/inference distribution stays identical. See
+  [`STREAM_V2_REPORT.md`](STREAM_V2_REPORT.md) and
+  [`DESIGN_STREAMING_WM.md`](DESIGN_STREAMING_WM.md) for the full architecture
+  and the dead ends (SSM carry, truncated-BPTT) that led there.
 
 ## Code map
 
 | Path | What |
 |---|---|
-| [`starVLA/model/framework/VLA_DINO_Mamba_JEPA.py`](starVLA/model/framework/VLA_DINO_Mamba_JEPA.py) | **VLA-WM**: online DINO + EMA target + masking (JEPA stage) |
+| [`starVLA/model/framework/VLA_DINO_StreamingMamba.py`](starVLA/model/framework/VLA_DINO_StreamingMamba.py) | **Streaming v2 (best)**: 2-frame world-model predictor on top of V2 |
+| [`starVLA/model/framework/VLA_DINO_Mamba_JEPA.py`](starVLA/model/framework/VLA_DINO_Mamba_JEPA.py) | VLA-WM: online DINO + EMA target + masking (JEPA stage) |
 | [`starVLA/model/framework/VLA_DINO_Mamba_Diff.py`](starVLA/model/framework/VLA_DINO_Mamba_Diff.py) | V2: endpoint predictor + flow-matching head |
 | [`starVLA/model/framework/VLA_DINO_Mamba.py`](starVLA/model/framework/VLA_DINO_Mamba.py) | V1: per-frame + inverse dynamics baseline |
-| [`starVLA/model/modules/world_model/mamba_world_model.py`](starVLA/model/modules/world_model/mamba_world_model.py) | Mamba state encoder / predictor / inverse-dynamics head |
+| [`starVLA/model/modules/world_model/mamba_world_model.py`](starVLA/model/modules/world_model/mamba_world_model.py) | `StreamingMambaPredictor` (Mamba-2, 2-frame obs + time embed), plus legacy V1/V2 modules |
 | [`scripts/train_mamba_wm.py`](scripts/train_mamba_wm.py) | Trainer (`--stage jepa\|predictor\|stage2`, `--qwen_lora`) |
+| [`scripts/run_streaming_libero10.sh`](scripts/run_streaming_libero10.sh) | Streaming v2 two-stage chain (predictor → stage2) on libero_10 |
 | [`scripts/run_2stage_dino_jepa.sh`](scripts/run_2stage_dino_jepa.sh) | VLA-WM two-stage chain (jepa → stage2) |
 | [`scripts/eval_libero_dino.sh`](scripts/eval_libero_dino.sh) | LIBERO eval (server + rollout) |
+| [`STREAM_V2_REPORT.md`](STREAM_V2_REPORT.md) | Streaming v2 architecture, training metrics, eval, model sizes |
+| [`DESIGN_STREAMING_WM.md`](DESIGN_STREAMING_WM.md) | Design doc: SSM carry attempt, why it was dropped, current 2-frame design |
 | [`RESEARCH.md`](RESEARCH.md) | Full design notes, decisions, failure analysis |
 
 ## Quick start
 
 ```bash
-# Train VLA-WM (JEPA-DINO stage -> action stage), both with Qwen-LoRA
-bash scripts/run_2stage_dino_jepa.sh
+# Train Streaming v2 (predictor stage1 + action stage2), both with Qwen-LoRA
+bash scripts/run_streaming_libero10.sh all
 
 # Evaluate on LIBERO-10 (50 trials/task)
-bash scripts/eval_libero_dino.sh libero_10 50 18012 \
-  results/dino_mamba_jepa_libero_10/stage2/checkpoints/mamba_wm_final.pt jepa50 0
+bash scripts/eval_libero_dino.sh libero_10 50 18099 \
+  results/stream_libero10/stage2/checkpoints/mamba_wm_final.pt stream_v2 0
 ```
 
 Backbone checkpoint, datasets, and LIBERO setup follow the base VLA-JEPA repo;

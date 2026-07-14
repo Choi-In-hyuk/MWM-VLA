@@ -1576,6 +1576,62 @@ class LeRobotMixtureDataset(Dataset):
         
         return resized_video
 
+    def get_explicit(self, dataset_idx: int, trajectory_id, base_index: int) -> dict:
+        """Same as `__getitem__` but with explicit (dataset, trajectory, step)
+        selection — no random sampling. Used by episode-streaming samplers
+        (e.g. truncated-BPTT Stage-2) that drive the sample order themselves.
+
+        On video-decode failure, falls back to a small forward step within the
+        same trajectory (so the streaming cursor stays roughly in place).
+        """
+        dataset = self.datasets[dataset_idx]
+        traj_len = int(dataset.trajectory_lengths[
+            int(np.where(dataset.trajectory_ids == trajectory_id)[0][0])
+        ])
+        for attempt in range(10):
+            try:
+                return self._build_sample(dataset, trajectory_id, base_index)
+            except Exception as e:
+                # Try a nearby step within the same trajectory
+                base_index = (base_index + 1) % traj_len
+                if attempt == 9:
+                    raise
+
+    def _build_sample(self, dataset, trajectory_name, step) -> dict:
+        """Shared sample-building body (extracted from `__getitem__` so the
+        explicit path can reuse it)."""
+        data = dataset.transforms(dataset.get_step_data(trajectory_name, step))
+        videos, images = [], []
+        for i, video_key in enumerate(dataset.modality_keys["video"]):
+            video = data[video_key]
+            video = self.resize_video_opencv(video, self.video_resolution_size)
+            if len(dataset.modality_keys["video"]) > 2:
+                if i in [0, 2]:
+                    videos.append(video)
+            else:
+                videos.append(video)
+            primary_image = Image.fromarray(video[0]).resize((self.resolution_size, self.resolution_size))
+            images.append(primary_image)
+        if len(dataset.modality_keys["video"]) == 1:
+            videos = [videos[0], videos[0].copy()]
+        videos = np.stack(videos, axis=0)
+        language = data[dataset.modality_keys["language"][0]][0]
+        action = []
+        for action_key in dataset.modality_keys["action"]:
+            action.append(data[action_key])
+        action = np.concatenate(action, axis=1).astype(np.float16)
+        return_dict = dict(action=action, image=images, lang=language, video=videos)
+        _ds_name = os.path.basename(str(getattr(dataset, "dataset_path", dataset)))
+        return_dict["cache_key"] = f"{_ds_name}|{int(trajectory_name)}|{int(step)}"
+        if self.with_state:
+            state = []
+            for state_key in dataset.modality_keys["state"]:
+                state.append(data[state_key])
+            state = np.concatenate(state, axis=1).astype(np.float16)
+            return_dict["state"] = state[0:1]
+            return_dict["state_full"] = state
+        return return_dict
+
     def __getitem__(self, index: int) -> dict:
         """Get the data for a single trajectory and start index.
 
@@ -1587,7 +1643,7 @@ class LeRobotMixtureDataset(Dataset):
         """
         max_retries = 10
         last_exception = None
-        
+
         for attempt in range(max_retries):
             try:
                 dataset, trajectory_name, step = self.sample_step(index)
@@ -1625,7 +1681,12 @@ class LeRobotMixtureDataset(Dataset):
                     for state_key in dataset.modality_keys["state"]:
                         state.append(data[state_key])
                     state = np.concatenate(state, axis=1).astype(np.float16)
+                    # legacy field: first-frame state (used by V2 / DualMamba etc.).
                     return_dict["state"] = state[0:1]
+                    # full trajectory state aligned with `video` time axis.
+                    # New consumers (e.g. StreamingMamba) need the per-frame
+                    # proprioception to match the video stream length.
+                    return_dict["state_full"] = state
                 #print(videos[0].shape) #[horizon, H, W, 3]
                 #print(action.shape) #[horizon, action_dim]
                 #print(images[0]) #PIL.Image

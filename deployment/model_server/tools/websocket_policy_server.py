@@ -131,6 +131,22 @@ class WebsocketPolicyServer:
                 "data": data,
             }
 
+        # episode reset (clears SSM hidden state in streaming-Mamba models, etc.)
+        elif mtype == "reset":
+            try:
+                if hasattr(self._policy, "episode_reset"):
+                    self._policy.episode_reset()
+                    return {"status": "ok", "ok": True, "type": "reset", "request_id": req_id}
+                # No-op for policies without explicit episode state
+                return {"status": "ok", "ok": True, "type": "reset",
+                        "request_id": req_id, "note": "policy has no episode_reset"}
+            except Exception as e:
+                logging.exception("episode_reset failed (request_id=%s)", req_id)
+                return {
+                    "status": "error", "ok": False, "type": "reset",
+                    "request_id": req_id, "error": {"message": str(e)},
+                }
+
         # unknow request type
         else:
             return {

@@ -79,11 +79,22 @@ def eval_libero(args: Args) -> None:
     # Set random seed
     np.random.seed(args.seed)
 
-    # Initialize LIBERO task suite
-    benchmark_dict = benchmark.get_benchmark_dict()
+    # Initialize LIBERO task suite. For libero_mix (LIBERO-Plus perturbation
+    # benchmark), swap in our custom benchmark registry that supports
+    # `category_value`; the stock LIBERO_MIX class does not accept it.
     if args.task_suite_name == "libero_mix":
+        import importlib.util
+        _plus_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "LIBERO-Plus", "libero_plus_init.py",
+        )
+        _spec = importlib.util.spec_from_file_location("libero_plus_init", _plus_path)
+        libero_plus_benchmark = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(libero_plus_benchmark)
+        benchmark_dict = libero_plus_benchmark.get_benchmark_dict()
         task_suite = benchmark_dict[args.task_suite_name](category_value=args.category_value)
     else:
+        benchmark_dict = benchmark.get_benchmark_dict()
         task_suite = benchmark_dict[args.task_suite_name]()
     num_tasks_in_suite = task_suite.n_tasks
     logging.info(f"Task suite: {args.task_suite_name}")
@@ -281,7 +292,7 @@ def _get_libero_env(task, resolution, seed):
         / task.bddl_file
     )
     env_args = {
-        "bddl_file_name": task_bddl_file,
+        "bddl_file_name": str(task_bddl_file),
         "camera_heights": resolution,
         "camera_widths": resolution,
     }

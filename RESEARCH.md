@@ -46,13 +46,43 @@
 |---|---|---|
 | V1 | per-frame s₁..s₇ + 학습된 IDM | **20%** (4/20) |
 | V2 | **끝점 s_end + diffusion 헤드** | **84.8%** (424/500, 50 trials) |
-| **V2 + Qwen LoRA** *(best)* | + Qwen LoRA(attn, r16) | **88.4%** (442/500, 50 trials) |
+| V2 + Qwen LoRA | + Qwen LoRA(attn, r16) | **88.4%** (442/500, 50 trials) |
 | #2 (VLA-WM) | + DINO를 JEPA식 학습(online+EMA+마스킹) | **84.8%** (424/500, 50 trials) |
-| (참고) base VLA-JEPA | 원본 (full) | ~90%+ |
+| V2+LoRA (libero_all 4-suite 학습) | 동일 구조, 데이터만 4-suite | **91.2%** (456/500, 50 trials) |
+| **Streaming v2 — 2-frame WM** *(best)* | + past(t−7) frame, no SSM carry | **93.2%** (466/500, 50 trials) |
+| (참고) base VLA-JEPA | 원본 (full) | 95.8% |
 
 > **#2 (DINO-JEPA) 결과 — 개선 없음.** 인코더가 예측 task엔 잘 적응(pred_cos 0.98,
 > s0_std ~1.4 안정 = collapse 없음)했으나, **단일 시드에서 액션 성공률은 84.8%로 V2+LoRA(88.4)에 못 미침.**
 > "표현 목적이 좋아져도 정책이 안 좋아지는" 전형. 진짜 회귀인지 시드 노이즈인지는 multi-seed 필요.
+
+### Streaming v2 (2-frame world model) — 현재 베스트
+
+> 자세한 보고: [`STREAM_V2_REPORT.md`](STREAM_V2_REPORT.md), 설계 진화 과정: [`DESIGN_STREAMING_WM.md`](DESIGN_STREAMING_WM.md).
+
+핵심 변경 (V2 + LoRA 대비):
+- **Predictor 입력에 과거 frame 추가**: 단일 현재 frame → `[past(t−7), present(t)]` 두 장 DINO 임베딩.
+  per-frame `time_emb`로 두 frame을 구분.
+- **SSM carry 안 함**: `states=None` 고정. 학습/추론 분포 완전 일치.
+- **robot_state는 predictor에서 제거** (action_head에만 유지) — baseline과 동일.
+- **cold start는 dataloader front-padding으로 자연 처리**: `obs_indices=[-7, 0, 7]`,
+  base<7인 sample은 frame 0 복제 → 추론 t=0의 분포 그대로 학습.
+
+학습 metric (libero_10 단독, 15k+15k step, DDP×2, eff bs 32):
+- stage1: pred_cos = 0.9124
+- stage2: pred_cos = 0.9242, action_loss = 0.0104
+
+평가: **libero_10 50 trial/task = 93.2%**. baseline `v2lora_libero_all` (libero_10 91.2%) 대비 +2.0%p,
+**같은 데이터**(libero_10 단독)·**같은 학습 budget**(15k+15k)에서 +2.0%p는 **predictor에 과거 frame 1장 추가**한 단일 변경 효과.
+
+#### 폐기된 시도 (왜 안 했는가)
+
+| 방향 | 시도 결과 | 폐기 이유 |
+|---|---|---|
+| SSM hidden state를 episode 전체에 걸쳐 carry | 0% (3 trial) | 학습 시 carry가 sample 안 2 chunk만 발생 → 추론 분포(수십 chunk 누적)와 분포 불일치. carry 끄면(83%) toggle(67%)보다 잘 됨. |
+| Truncated-BPTT episode streaming (Stage-2) | pred_cos 0.938 → 0.902로 회귀 | random-window보다 학습 다양성 부족 + 누적 state로 gradient 불안정 |
+| Predictor에 robot_state token 추가 | shape/dtype 미스매치 디버깅 비용 | action head에 이미 robot_state 들어가 중복. predictor는 시각만 집중하는 게 단순. |
+| ckpt 합치기 (학습 중단 후 final.pt 수동 재구성) | Qwen base weight이 원본과 다름 (98% mismatch) | strict=False 로딩 시 key prefix 미스매치를 silent하게 무시. 해결: 학습 끝까지 돌려서 `save("final", full=True)`가 정상 실행되게 함. |
 
 ### 진행 중 / 추가 실험
 
@@ -197,10 +227,13 @@ Stage 2: 예측기 fine-tune(완전 frozen ❌) + diffusion 헤드 학습
 - [x] novelty 문헌 검증, eval 셋업 작동
 - [x] **V2 구현·학습·검증** (끝점 + diffusion) → **84.8%** (50 trials)
 - [x] **Qwen LoRA** (양 stage) → **88.4%** (+3.6%, borderline 유의)
-- [x] 50 trials 안정 비교 (non-LoRA vs LoRA), 결과 RESEARCH.md 정리
-- [ ] **#2: DINO 풀어서 JEPA식 학습** (online 인코더 + EMA 타깃 + 마스킹) ← 진행 중
-- [ ] (옵션) multi-seed로 LoRA 유의성 확정
-- [ ] (옵션) V1-temporal: 시간축 순환 Mamba (과거 state로 모션)
+- [x] **V2+LoRA, 4-suite (libero_all) 학습** → libero_10 **91.2%** (50 trials)
+- [x] **#2 (VLA-WM, JEPA-DINO)** → 84.8% (개선 없음, 본문 §3 참조)
+- [x] **Streaming v1 (SSM hidden carry)** — 시도 후 폐기 (carry 켜면 0% / 끄면 83%, RESEARCH §3 표 참조)
+- [x] **Streaming v2 (2-frame WM, no carry)** → libero_10 **93.2%** (50 trials) — 현재 베스트
+- [ ] Streaming v2를 4-suite (libero_all)로 학습 → 4-suite eval
+- [ ] LIBERO-Plus eval (perturbation robustness) — assets 설치 완료, 패키지 설치 보류
+- [ ] (옵션) multi-seed로 유의성 확정
 - [ ] 논문 최종: 전 suite 평가 + 지연시간(latency)
 
 ### 산출물(스크립트)

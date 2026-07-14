@@ -34,7 +34,9 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from mamba_ssm import Mamba
+from mamba_ssm import Mamba, Mamba2
+from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
+from einops import rearrange
 
 
 class RMSNorm(nn.Module):
@@ -285,6 +287,306 @@ class InverseDynamicsHead(nn.Module):
                state: Optional[torch.Tensor] = None) -> torch.Tensor:
         """s_t, s_tp1: [B, N, D] -> [B, action_dim]."""
         return self._pair(s_t, s_tp1, self._encode_state(s_t, state))
+
+
+class StreamingMambaBlock(nn.Module):
+    """Causal pre-norm Mamba-2 block with explicit SSM-state carry.
+
+    Built on `mamba_ssm.Mamba2`, but the forward pass calls
+    `mamba_chunk_scan_combined` directly so that we can pass `initial_states`
+    (the SSM state at the end of the previous chunk) and request
+    `return_final_states`. Both flow through PyTorch autograd → gradient from
+    chunk-N loss reaches chunk-N-1 parameters via the carried state.
+
+    To keep the math exactly equivalent across "one long sequence" vs. "split
+    into chunks with carried state" we set `d_conv=1` (no 1-D convolution).
+    Mamba-2's SSM is strong enough on its own; conv state carry would
+    otherwise be needed to be equivalent across the chunk boundary.
+
+    API
+    ---
+    forward(x, initial_states=None) -> (y, final_state)
+      x              : [B, L, D]
+      initial_states : [B, nheads, headdim, d_state]  (or None for zero init)
+      y              : [B, L, D]
+      final_state    : [B, nheads, headdim, d_state]  (always returned)
+    """
+
+    def __init__(self, dim: int, d_state: int = 64, d_conv: int = 1,
+                 expand: int = 2, headdim: int = 64, chunk_size: int = 64):
+        super().__init__()
+        self.norm = RMSNorm(dim)
+        # d_conv=1 makes split-with-state mathematically equivalent to concat.
+        self.mamba = Mamba2(
+            d_model=dim,
+            d_state=d_state,
+            d_conv=d_conv,
+            expand=expand,
+            headdim=headdim,
+            chunk_size=chunk_size,
+        )
+        self.mlp = nn.Sequential(
+            RMSNorm(dim), nn.Linear(dim, expand * dim), nn.GELU(), nn.Linear(expand * dim, dim)
+        )
+        self.d_inner = expand * dim
+        self.d_state = d_state
+        self.headdim = headdim
+        self.nheads = self.d_inner // headdim
+        self.chunk_size = chunk_size
+        self.ngroups = self.mamba.ngroups
+        self.d_ssm = self.mamba.d_ssm
+        self.d_conv = d_conv
+
+    def init_state(self, batch_size: int, device, dtype=None):
+        """Zero initial SSM state, shape matching what mamba_chunk_scan_combined expects."""
+        if dtype is None:
+            dtype = self.norm.weight.dtype
+        return torch.zeros(
+            batch_size, self.nheads, self.headdim, self.d_state,
+            device=device, dtype=dtype,
+        )
+
+    def _mamba_with_state(self, u: torch.Tensor, initial_states=None):
+        """Run Mamba-2 over `u`, optionally starting from `initial_states`,
+        and always returning the final SSM state. Re-implements
+        `Mamba2.forward` so we can expose the state plumbing."""
+        m = self.mamba
+        # in_proj produces a single big tensor we split into z, xBC, dt
+        zxbcdt = m.in_proj(u)
+        A = -torch.exp(m.A_log.float())
+        z, xBC, dt = torch.split(
+            zxbcdt,
+            [m.d_inner, m.d_inner + 2 * m.ngroups * m.d_state, m.nheads],
+            dim=-1,
+        )
+        # d_conv == 1 path: just activation, no 1-D conv (no state to carry)
+        if self.d_conv == 1:
+            xBC_act = m.act(xBC)
+        else:
+            # Conv path: NB this breaks chunk-equivalence; we keep it only
+            # in case someone wants to experiment with d_conv > 1 (then state
+            # equivalence is not guaranteed across chunk boundary).
+            xBC_act = m.act(
+                m.conv1d(xBC.transpose(1, 2)).transpose(1, 2)[:, :-(self.d_conv - 1)]
+            )
+        x, B, C = torch.split(
+            xBC_act,
+            [m.d_ssm, m.ngroups * m.d_state, m.ngroups * m.d_state],
+            dim=-1,
+        )
+        y, final_state = mamba_chunk_scan_combined(
+            rearrange(x, "b l (h p) -> b l h p", p=m.headdim),
+            dt, A,
+            rearrange(B, "b l (g n) -> b l g n", g=m.ngroups),
+            rearrange(C, "b l (g n) -> b l g n", g=m.ngroups),
+            chunk_size=m.chunk_size,
+            D=rearrange(m.D, "(h p) -> h p", p=m.headdim) if m.D_has_hdim else m.D,
+            z=rearrange(z, "b l (h p) -> b l h p", p=m.headdim) if not m.rmsnorm else None,
+            dt_bias=m.dt_bias,
+            dt_softplus=True,
+            initial_states=initial_states,
+            return_final_states=True,
+        )
+        y = rearrange(y, "b l h p -> b l (h p)")
+        if m.rmsnorm:
+            y = m.norm(y, z)
+        out = m.out_proj(y)
+        return out, final_state
+
+    def forward(self, x: torch.Tensor, initial_states=None):
+        """Pre-norm Mamba-2 residual block with state carry.
+
+        x              : [B, L, D]
+        initial_states : per-block carried SSM state or None
+        returns
+            y          : [B, L, D]
+            final_state: [B, nheads, headdim, d_state]
+        """
+        h = self.norm(x)
+        out, final_state = self._mamba_with_state(h, initial_states=initial_states)
+        x = x + out
+        x = x + self.mlp(x)
+        return x, final_state
+
+
+class StreamingMambaPredictor(nn.Module):
+    """Streaming Mamba world-model predictor.
+
+    Conceptually: the model predicts the chunk-end latent s_end every H frames,
+    but its hidden state observes ALL intermediate frames as they arrive. This
+    gives the same chunk-rate prediction interface as the baseline predictor
+    while carrying the in-chunk dynamics in the SSM state.
+
+    Training path (`forward`)
+    -------------------------
+    The dataloader builds a *single concatenated sequence* of M consecutive
+    chunks interleaved with mid-chunk stream frames, with one query block per
+    chunk. A single parallel-scan Mamba forward processes the whole thing.
+
+    Sequence layout for M=2 (per sample), where x means "DINO patch tokens
+    of one frame", r means "robot_state token", a means "action_tokens":
+
+        [ a_0 | r_0 | x_0 | Q_0           # chunk 0: predict s at t=+7
+        | r_2 | x_2                        # mid-chunk stream (frame +2)
+        | r_4 | x_4                        # mid-chunk stream (frame +4)
+        | r_6 | x_6                        # mid-chunk stream (frame +6)
+        | a_1 | r_7 | x_7 | Q_1 ]          # chunk 1: predict s at t=+14
+
+    The model reads out per-chunk s_end predictions at the Q_i slices. Mamba's
+    causal SSM ensures Q_1 sees everything that came before, so the mid-chunk
+    frames really do influence the next chunk's prediction (and gradients flow
+    back to teach the model to use them).
+
+    Inference path (`forward_for_inference` + `step_stream`)
+    --------------------------------------------------------
+    Mathematically identical, but split because frames arrive one at a time.
+    `forward_for_inference` runs the chunk-start tokens; `step_stream` runs
+    the per-frame stream tokens one at a time using the recurrent `step` API.
+    SSM state is carried across calls within an episode.
+
+    Input dims
+    ----------
+        state_dim         : Mamba internal width (kept independent of DINO)
+        action_token_dim  : Qwen hidden = 2048
+        dino_dim          : 768 (vitb14)
+        tokens_per_frame  : N = 512 (2 views × 256 patches)
+        robot_state_dim   : 8 (joints 7 + gripper 1)
+    """
+
+    def __init__(self, state_dim: int = 1024, action_token_dim: int = 2048,
+                 dino_dim: int = 768, tokens_per_frame: int = 512,
+                 robot_state_dim: int = 0, depth: int = 12,
+                 d_state: int = 64, d_conv: int = 1, expand: int = 2,
+                 headdim: int = 64, chunk_size: int = 64):
+        super().__init__()
+        self.state_dim = state_dim
+        self.dino_dim = dino_dim
+        self.tokens_per_frame = tokens_per_frame
+        self.depth = depth
+        # robot_state is fed only to the action head, not to the predictor.
+        # We keep the kwarg for API compat but ignore any non-zero value.
+        self.robot_state_dim = 0
+
+        # ---- projections into Mamba space
+        self.action_proj = nn.Linear(action_token_dim, state_dim)
+        self.dino_proj = nn.Linear(dino_dim, state_dim)
+
+        # ---- role embeddings
+        # Tells the SSM "this token belongs to ...". One vector per role,
+        # broadcast over all matching tokens.
+        self.role_emb = nn.ParameterDict({
+            "action": nn.Parameter(torch.zeros(1, 1, state_dim)),
+            "obs":    nn.Parameter(torch.zeros(1, 1, state_dim)),
+            "query":  nn.Parameter(torch.zeros(1, 1, state_dim)),
+        })
+        for p in self.role_emb.values():
+            nn.init.trunc_normal_(p, std=0.02)
+
+        # Learnable query placeholder (N tokens; SSM reads out s_end here).
+        self.query_tok = nn.Parameter(torch.zeros(1, tokens_per_frame, state_dim))
+        nn.init.trunc_normal_(self.query_tok, std=0.02)
+
+        # Positional embed for the patch axis (shared across frames). Helps
+        # the SSM distinguish patches even though all observation tokens
+        # share the same role embedding.
+        self.patch_pos = nn.Parameter(torch.zeros(1, tokens_per_frame, state_dim))
+        nn.init.trunc_normal_(self.patch_pos, std=0.02)
+
+        # Per-input-frame time embedding. Two input frames per chunk: t-7 (idx 0)
+        # and t (idx 1). Added to obs tokens so the SSM knows which frame each
+        # patch came from. Shape [2, 1, D] broadcasts over patches.
+        self.time_emb = nn.Parameter(torch.zeros(2, 1, state_dim))
+        nn.init.trunc_normal_(self.time_emb, std=0.02)
+
+        # ---- streaming Mamba-2 stack (d_conv=1 keeps split-with-state equivalent to concat)
+        self.blocks = nn.ModuleList([
+            StreamingMambaBlock(state_dim, d_state=d_state, d_conv=d_conv, expand=expand,
+                                headdim=headdim, chunk_size=chunk_size)
+            for _ in range(depth)
+        ])
+        self.norm_out = RMSNorm(state_dim)
+        self.out_proj = nn.Linear(state_dim, state_dim)
+        # back to DINO dim so downstream cond_proj / head sees s_end matching s_0
+        self.to_dino = nn.Linear(state_dim, dino_dim)
+
+    # ------------------------------------------------------------------ helpers
+    def _token_action(self, action_tokens: torch.Tensor) -> torch.Tensor:
+        """[B, Na, A_dim] -> [B, Na, D] with action role embedding."""
+        return self.action_proj(action_tokens) + self.role_emb["action"]
+
+    def _token_obs(self, s: torch.Tensor) -> torch.Tensor:
+        """Two-frame obs.
+        Input  : [B, 2, N, dino_dim]  (t-7 at idx 0, t at idx 1)
+                 — accepts [B, N, dino_dim] as a single frame for back-compat.
+        Output : [B, 2*N, D] with obs role + patch positional + time embed.
+        """
+        if s.dim() == 3:
+            # legacy single-frame path (kept for tests / one-frame call sites)
+            return self.dino_proj(s) + self.role_emb["obs"] + self.patch_pos
+        # two-frame: project per frame, add patch_pos (shared) + time_emb (per frame)
+        B, T, N, _ = s.shape
+        x = self.dino_proj(s)                                  # [B, T, N, D]
+        x = x + self.role_emb["obs"]                            # broadcast
+        x = x + self.patch_pos.unsqueeze(0)                     # [1,1,N,D] broadcasts over T
+        x = x + self.time_emb[:T].unsqueeze(0)                  # [1,T,1,D] broadcasts over N
+        return x.reshape(B, T * N, x.shape[-1])
+
+    def _token_query(self, B: int) -> torch.Tensor:
+        """[B, N, D] learnable query tokens with query role embedding."""
+        return (self.query_tok + self.role_emb["query"]).expand(B, -1, -1)
+
+    # ------------------------------------------------------------------ chunk forward (train + inference)
+    def init_states(self, batch_size: int, device, dtype=None):
+        """Per-layer zero SSM state (used as initial_states for the FIRST chunk
+        of a sample / episode)."""
+        return [blk.init_state(batch_size, device, dtype) for blk in self.blocks]
+
+    # nn.Module convention: forward is the entry point
+    def forward(self, action_tokens, s_t, states=None):
+        return self.forward_chunk(action_tokens, s_t, states)
+
+    def forward_chunk(self, action_tokens: torch.Tensor,
+                      s_t: torch.Tensor,
+                      states=None):
+        """Run ONE chunk forward.
+
+        Sequence per chunk:
+            [ a | s | query ]
+              Na   T*N   N
+        where T is the number of input frames (1 or 2). robot_state is NOT
+        consumed here — it goes only to the downstream action head.
+
+        Inputs:
+          action_tokens : [B, Na, A_dim]
+          s_t           : [B, N, dino_dim]  (single frame) or [B, 2, N, dino_dim]
+          states        : list of per-layer SSM states, or None for zero init
+
+        Returns:
+          s_end_pred    : [B, N, dino_dim]
+          new_states    : list of per-layer SSM states
+        """
+        B = action_tokens.shape[0]
+        N = self.tokens_per_frame
+
+        a_tok = self._token_action(action_tokens)             # [B, Na, D]
+        o_tok = self._token_obs(s_t)                          # [B, T*N, D]
+        q_tok = self._token_query(B)                          # [B, N, D]
+        seq = torch.cat([a_tok, o_tok, q_tok], dim=1)         # [B, L, D]
+
+        if states is None:
+            states = [None] * len(self.blocks)
+
+        h = seq
+        new_states = []
+        for blk, st in zip(self.blocks, states):
+            h, fs = blk(h, initial_states=st)
+            new_states.append(fs)
+        h = self.norm_out(h)
+
+        # Read out s_end at the query slice (last N tokens)
+        q_out = self.out_proj(h[:, -N:, :])
+        s_end_pred = self.to_dino(q_out)
+        return s_end_pred, new_states
 
 
 if __name__ == "__main__":

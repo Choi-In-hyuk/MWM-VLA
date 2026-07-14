@@ -23,6 +23,7 @@ Two-stage training:
 """
 from typing import List, Optional
 
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -239,7 +240,44 @@ class VLA_DINO_Mamba_Diff(VLA_JEPA):
         else:
             action_tokens = self._qwen_action_tokens(batch_images, instructions)
 
-        s_end_pred = self.mamba_predictor(s_0, action_tokens)[:, 0]   # [B,N,D]
+        # change-aware context masking (training only, predictor stage).
+        # Hide patches with large s_0->s_end_gt change with a soft top-K sampler,
+        # forcing the predictor to actually predict change instead of copying s_0.
+        # No effect on the eval path (predict_action does not pass vis_idx).
+        mask_ratio = float(os.environ.get("CHANGE_MASK_RATIO", "0.0"))
+        # Optional linear ease-out: during the last `ramp_frac` of training,
+        # decay mask_ratio linearly to 0 so the predictor sees the inference
+        # (no-mask) distribution before training ends.
+        ramp_frac = float(os.environ.get("CHANGE_MASK_RAMP", "0.0"))
+        if ramp_frac > 0.0 and hasattr(self, "_step") and hasattr(self, "_max_steps"):
+            prog = self._step / max(1, self._max_steps)
+            if prog > 1.0 - ramp_frac:
+                decay = (prog - (1.0 - ramp_frac)) / ramp_frac        # 0 -> 1
+                mask_ratio = mask_ratio * max(0.0, 1.0 - decay)
+        vis_idx = None
+        if self.training and mask_ratio > 0.0 and w["pred"] > 0:
+            B, N, D = s_0.shape
+            Nv = max(1, int(round(N * (1.0 - mask_ratio))))
+            with torch.no_grad():
+                delta = (s_end_gt - s_0).pow(2).sum(dim=-1)          # [B,N]
+                temp = float(os.environ.get("CHANGE_MASK_TEMP", "1.0"))
+                # Higher delta -> higher prob of being hidden. We sample WITHOUT
+                # replacement: keep N-Nv (= Nm) patches with highest hide-score
+                # noisy-rank (Gumbel), then visible = remaining Nv.
+                norm = (delta - delta.mean(dim=1, keepdim=True)) / (delta.std(dim=1, keepdim=True) + 1e-6)
+                hide_score = norm / max(temp, 1e-3)
+                # Gumbel-top-k: noisy argmax = sampling without replacement
+                g = -torch.log(-torch.log(torch.rand(B, N, device=device).clamp_min(1e-12)))
+                noisy = hide_score + g
+                # take top (N-Nv) as hidden -> visible = the rest
+                Nm = N - Nv
+                hide_idx = torch.topk(noisy, k=Nm, dim=1).indices       # [B,Nm]
+                # build visible mask
+                mask = torch.ones(B, N, dtype=torch.bool, device=device)
+                mask.scatter_(1, hide_idx, False)
+                vis_idx = mask.nonzero(as_tuple=False)[:, 1].view(B, Nv)
+
+        s_end_pred = self.mamba_predictor(s_0, action_tokens, vis_idx=vis_idx)[:, 0]   # [B,N,D]
         L_pred = F.l1_loss(s_end_pred, s_end_gt)
         out = {"pred_cos": F.cosine_similarity(s_end_pred, s_end_gt, dim=-1).mean()}
 
@@ -273,6 +311,9 @@ class VLA_DINO_Mamba_Diff(VLA_JEPA):
         frame0 = torch.stack(views).unsqueeze(2).to(device)         # [B,V,1,256,256,3]
         s_0 = self._dino_latents(frame0)[:, 0]
         s_end = self.mamba_predictor(s_0, action_tokens)[:, 0]
+        if os.environ.get("ABLATE_PRED", "0") == "1":
+            # bypass Mamba predictor: feed s_0 as the "future" latent
+            s_end = s_0
         st = None
         if state is not None:
             st = torch.from_numpy(np.array(state)).to(device, dtype=torch.float32)

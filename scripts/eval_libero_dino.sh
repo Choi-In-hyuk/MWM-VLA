@@ -14,15 +14,19 @@ PY=/home/choi/miniconda3/envs/vla_jepa/bin/python
 OUT=results/eval/${SUITE}_${TAG}
 SERVER_LOG=/tmp/dino_server_${PORT}.log
 
-export LIBERO_HOME=/home/choi/LIBERO-PRO
-export LIBERO_CONFIG_PATH=${LIBERO_HOME}/libero
-export PYTHONPATH=${LIBERO_HOME}:$(pwd):${PYTHONPATH:-}
+export LIBERO_HOME=${LIBERO_HOME:-/home/choi/MambaVLA/LIBERO}
+export LIBERO_CONFIG_PATH=${LIBERO_CONFIG_PATH:-${LIBERO_HOME}/libero}
 export MUJOCO_GL=egl
 export PYTHONUNBUFFERED=1
 mkdir -p "${OUT}"
 
+# server runs in the training env (vla_jepa) only — no LIBERO sim deps needed.
+SERVER_PYTHONPATH="$(pwd):${PYTHONPATH:-}"
+# client picks up LIBERO + sim deps from the standalone mambavla_env site-packages.
+CLIENT_PYTHONPATH="${LIBERO_HOME}:/home/choi/MambaVLA/mambavla_env/lib/python3.10/site-packages:$(pwd):${PYTHONPATH:-}"
+
 echo "=== starting model server (port ${PORT}) ==="
-${PY} deployment/model_server/server_policy.py \
+PYTHONPATH="${SERVER_PYTHONPATH}" ${PY} deployment/model_server/server_policy.py \
     --ckpt_path ${CKPT} --port ${PORT} --cuda 0 > "${SERVER_LOG}" 2>&1 &
 SERVER_PID=$!
 trap "kill ${SERVER_PID} 2>/dev/null || true" EXIT
@@ -35,7 +39,7 @@ for i in $(seq 1 120); do
 done
 
 echo "=== eval: ${SUITE}, ${NUM_TRIALS} trials/task ==="
-${PY} examples/LIBERO/eval_libero.py \
+PYTHONPATH="${CLIENT_PYTHONPATH}" ${PY} examples/LIBERO/eval_libero.py \
     --args.pretrained-path ${CKPT} \
     --args.host 127.0.0.1 --args.port ${PORT} \
     --args.task-suite-name "${SUITE}" \

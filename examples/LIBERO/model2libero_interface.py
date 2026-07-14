@@ -136,8 +136,8 @@ class M1Inference:
             response = self.client.infer(vla_input)
             # unnormalize the action
             # import ipdb; ipdb.set_trace()
-            normalized_actions = response["data"]["normalized_actions"] # B, chunk, D        
-            normalized_actions = normalized_actions[0]    
+            normalized_actions = response["data"]["normalized_actions"] # B, chunk, D
+            normalized_actions = normalized_actions[0]
             self.raw_actions = self.unnormalize_actions(normalized_actions=normalized_actions, action_norm_stats=self.action_norm_stats)
         
         raw_actions = self.raw_actions[step % action_chunk_size][None]    

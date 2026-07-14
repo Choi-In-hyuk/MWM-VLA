@@ -82,8 +82,15 @@ class WebsocketClientPolicy:
 
     @override
     def reset(self, instruction) -> None:
-        payload = {"instruction": instruction, "reset": True}
-        self._ws.send(self._packer.pack(payload))
+        # send an explicit "reset" message so server can clear per-episode state
+        # (e.g. SSM hidden state in streaming-Mamba models). For backward
+        # compatibility we also include the legacy `reset` flag in payload.
+        msg = {
+            "type": "reset",
+            "request_id": "episode_reset",
+            "payload": {"instruction": instruction, "reset": True},
+        }
+        self._ws.send(self._packer.pack(msg))
         resp = self._ws.recv()
         pass
 
