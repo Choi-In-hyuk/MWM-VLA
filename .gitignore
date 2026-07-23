@@ -9,6 +9,8 @@ dataset_statistics.json
 
 # --- logs / temp ---
 *.log
+*.TXT
+MUJOCO_LOG.TXT
 /tmp/
 wandb/
 nohup.out
@@ -31,5 +33,19 @@ datasets/
 .DS_Store
 .ipynb_checkpoints/
 
-# transient experiment queue scripts
+# --- transient experiment queue scripts ---
 scripts/_wait_*.sh
+
+# --- external repos / not our code ---
+MambaVLA/
+
+# --- internal / draft docs (kept locally, not published) ---
+PAPER_DRAFT.md
+PRETRAIN_PLAN.md
+STREAM_V2_REPORT.md
+DESIGN_STREAMING_WM.md
+EXPERIMENTS_LOG.md
+RESEARCH.md
+*_LOG.md
+*_REPORT.md
+*_PLAN.md
