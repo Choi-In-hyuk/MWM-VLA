@@ -1,8 +1,9 @@
 #!/bin/bash
 # LIBERO-Plus eval across 7 perturbations split over 2 GPUs (in parallel).
 #
-# GPU 0 handles perturbations 1-4 (Background/Camera/Language/Light)
-# GPU 1 handles perturbations 5-7 (Objects/Robot/Sensor)
+# GPU 0 handles perturbations 1-6 (all except Sensor Noise, total ~28h)
+# GPU 1 handles perturbation 7 only (Sensor Noise, ~24h — it alone is the slowest)
+# This gives the best 2-GPU balance since Sensor Noise dominates single-cat time.
 # Both run in the background; this script waits for both to finish, then
 # concatenates their summaries.
 #
@@ -18,13 +19,13 @@ NUM_TRIALS=${3:-1}
 OUT_ROOT=results/eval_libero_plus/${TAG}
 mkdir -p "${OUT_ROOT}"
 
-echo "=== LIBERO-Plus split: GPU0 = 1,2,3,4 | GPU1 = 5,6,7 ==="
+echo "=== LIBERO-Plus split: GPU0 = 1-6 (non-Sensor) | GPU1 = 7 (Sensor Noise) ==="
 
-bash scripts/eval_libero_plus_all.sh "${CKPT}" "${TAG}" "${NUM_TRIALS}" 0 "1,2,3,4" \
+bash scripts/eval_libero_plus_all.sh "${CKPT}" "${TAG}" "${NUM_TRIALS}" 0 "1,2,3,4,5,6" \
     > "${OUT_ROOT}/gpu0.log" 2>&1 &
 PID0=$!
 
-bash scripts/eval_libero_plus_all.sh "${CKPT}" "${TAG}" "${NUM_TRIALS}" 1 "5,6,7" \
+bash scripts/eval_libero_plus_all.sh "${CKPT}" "${TAG}" "${NUM_TRIALS}" 1 "7" \
     > "${OUT_ROOT}/gpu1.log" 2>&1 &
 PID1=$!
 

@@ -97,7 +97,8 @@ def build_cfg(args):
         "seq_len_M": args.seq_len_M,
     })
     # Streaming framework needs per-frame proprioception.
-    if args.framework == "VLA_DINO_StreamingMamba":
+    # startswith so subclasses (e.g. VLA_DINO_StreamingMamba_FutureOnly) also get it.
+    if args.framework.startswith("VLA_DINO_StreamingMamba"):
         cfg.datasets.vla_data.with_state = True
     return cfg
 
@@ -129,6 +130,10 @@ def main():
                    help="full VLA_JEPA_Mamba state_dict to continue from (e.g. stage-1 output for stage 2)")
     p.add_argument("--data_root", default="/home/choi/data/datasets/LIBERO")
     p.add_argument("--data_mix", default="libero_10")
+    p.add_argument("--dataset_type", choices=["lerobot", "calvin"], default="lerobot",
+                   help="lerobot=LIBERO/Droid LeRobot layout; calvin=CALVIN npz+lang layout")
+    p.add_argument("--calvin_split", default="training",
+                   help="calvin only: training|validation")
     p.add_argument("--output_dir", default="results/mamba_wm_libero10")
     p.add_argument("--batch_size", type=int, default=8)
     p.add_argument("--lr", type=float, default=1e-4)
@@ -246,10 +251,19 @@ def main():
     # frameworks can also override video_horizon (number of consecutive frames the
     # loader fetches) for multi-chunk streaming windows.
     video_horizon = getattr(model, "video_horizon", model.horizon + 1)
-    dataset = get_vla_dataset(
-        data_cfg=cfg.datasets.vla_data, action_horizon=model.horizon,
-        video_horizon=video_horizon, obs_indices=obs_indices,
-    )
+    if args.dataset_type == "calvin":
+        from starVLA.dataloader.calvin_dataset import CalvinDataset
+        dataset = CalvinDataset(
+            root=args.data_root, split=args.calvin_split,
+            obs_horizon=model.horizon, action_horizon=model.horizon,
+            image_size=cfg.datasets.vla_data.get("resolution_size", 256),
+            seed=args.seed + rank,
+        )
+    else:
+        dataset = get_vla_dataset(
+            data_cfg=cfg.datasets.vla_data, action_horizon=model.horizon,
+            video_horizon=video_horizon, obs_indices=obs_indices,
+        )
     sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, shuffle=True,
                                  drop_last=True) if is_ddp else None
     loader = DataLoader(

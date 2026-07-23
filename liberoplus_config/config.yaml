@@ -1,0 +1,5 @@
+assets: /home/choi/LIBERO-plus/libero/libero/assets
+bddl_files: /home/choi/LIBERO-plus/libero/libero/bddl_files
+benchmark_root: /home/choi/LIBERO-plus/libero/libero
+datasets: /home/choi/LIBERO-plus/libero/libero/datasets
+init_states: /home/choi/LIBERO-plus/libero/libero/init_files
