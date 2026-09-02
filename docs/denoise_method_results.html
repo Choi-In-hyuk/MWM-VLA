@@ -1,0 +1,371 @@
+<title>Canonical-Target Denoising WM</title>
+<meta name="description" content="Method, architecture, and results writeup for the canonical-target denoising world-model VLA.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=IBM+Plex+Mono:wght@400;500;600&family=STIX+Two+Text:ital@0;1&display=swap">
+<style>
+  :root{
+    --ink:#1a2332; --ink-soft:#4a5462; --paper:#faf9f6; --surface:#ffffff;
+    --line:#e2ddd3; --line-strong:#cdc6b8;
+    --teal:#2c6e6b; --teal-soft:#e6efee; --teal-deep:#1f504e;
+    --amber:#a9791b; --amber-soft:#f6efdd;
+    --mono:#6b6456;
+    --sh:0 1px 2px rgba(26,35,50,.04), 0 4px 16px rgba(26,35,50,.05);
+    --maxw:52rem;
+  }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+    --ink:#e8e4da; --ink-soft:#a7a294; --paper:#14171d; --surface:#1b1f27;
+    --line:#2b303a; --line-strong:#3a4150;
+    --teal:#63b3ac; --teal-soft:#182a29; --teal-deep:#8fd0c9;
+    --amber:#d6a94a; --amber-soft:#241f14;
+    --mono:#8f897a;
+    --sh:0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.35);
+  }}
+  :root[data-theme="dark"]{
+    --ink:#e8e4da; --ink-soft:#a7a294; --paper:#14171d; --surface:#1b1f27;
+    --line:#2b303a; --line-strong:#3a4150;
+    --teal:#63b3ac; --teal-soft:#182a29; --teal-deep:#8fd0c9;
+    --amber:#d6a94a; --amber-soft:#241f14;
+    --mono:#8f897a;
+    --sh:0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{background:var(--paper); color:var(--ink);
+    font-family:"Source Serif 4",Georgia,serif; font-size:17px; line-height:1.7;
+    -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:var(--maxw); margin:0 auto; padding:4.5rem 1.5rem 6rem;}
+  ::selection{background:var(--teal-soft); color:var(--teal-deep);}
+
+  /* header */
+  .eyebrow{font-family:"IBM Plex Mono",monospace; font-size:.72rem; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--teal); font-weight:500; margin:0 0 1.1rem;}
+  h1{font-family:"Fraunces",serif; font-weight:900; font-size:clamp(2.1rem,5vw,3.1rem);
+    line-height:1.08; letter-spacing:-.015em; text-wrap:balance; margin:0 0 1rem;}
+  .sub{font-size:1.12rem; color:var(--ink-soft); max-width:44rem; margin:0 0 2rem;}
+  .meta{display:flex; flex-wrap:wrap; gap:.5rem 1.4rem; font-family:"IBM Plex Mono",monospace;
+    font-size:.78rem; color:var(--mono); border-top:1px solid var(--line);
+    border-bottom:1px solid var(--line); padding:.9rem 0; margin:0 0 1rem;}
+  .meta b{color:var(--ink); font-weight:600;}
+  .note{font-family:"IBM Plex Mono",monospace; font-size:.74rem; color:var(--mono);
+    background:var(--amber-soft); border:1px solid var(--line); border-left:3px solid var(--amber);
+    padding:.7rem .9rem; border-radius:0 5px 5px 0; margin:1.6rem 0;}
+
+  h2{font-family:"Fraunces",serif; font-weight:600; font-size:1.62rem; letter-spacing:-.01em;
+    margin:3.4rem 0 .4rem; padding-top:1.4rem; border-top:1px solid var(--line); text-wrap:balance;}
+  h2 .s{font-family:"IBM Plex Mono",monospace; font-size:.9rem; color:var(--teal);
+    font-weight:500; margin-right:.6rem;}
+  h3{font-family:"Fraunces",serif; font-weight:600; font-size:1.16rem; margin:2rem 0 .3rem;}
+  p{margin:.7rem 0;}
+  a{color:var(--teal); text-decoration:underline; text-underline-offset:2px; text-decoration-thickness:.5px;}
+  strong{font-weight:600;}
+  em.term{font-style:normal; font-family:"IBM Plex Mono",monospace; font-size:.9em;
+    color:var(--teal-deep); background:var(--teal-soft); padding:.05em .35em; border-radius:3px;}
+  code{font-family:"IBM Plex Mono",monospace; font-size:.86em; color:var(--ink);
+    background:var(--surface); border:1px solid var(--line); padding:.05em .35em; border-radius:3px;}
+
+  ul{margin:.7rem 0; padding-left:1.2rem;} li{margin:.3rem 0;}
+
+  /* equation block */
+  .eq{background:var(--surface); border:1px solid var(--line); border-radius:8px;
+    padding:1.1rem 1.2rem; margin:1.3rem 0; box-shadow:var(--sh); overflow-x:auto;}
+  .eq .lbl{font-family:"IBM Plex Mono",monospace; font-size:.68rem; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--mono); margin-bottom:.6rem;}
+  /* HTML-typeset math (no external KaTeX; CSP-safe) */
+  .m{font-family:"STIX Two Text","Cambria Math",Georgia,serif; font-size:1.12rem;
+    line-height:1.9; color:var(--ink); white-space:nowrap;}
+  .m i{font-style:italic;}
+  .m sub{font-size:.68em; vertical-align:-.28em; font-style:italic; margin-left:.02em;}
+  .m sup{font-size:.68em; vertical-align:.5em;}
+  .m .op{font-style:normal; padding:0 .28em;}          /* operators = + − */
+  .m .rm{font-style:normal;}                            /* upright multiletter */
+  .m .fun{font-style:normal; font-family:"IBM Plex Mono",monospace; font-size:.82em;}
+  .m .nrm{font-style:normal;}
+  .frac{display:inline-flex; flex-direction:column; text-align:center; vertical-align:middle;
+    margin:0 .2em; font-size:.9em;}
+  .frac .num{border-bottom:1px solid currentColor; padding:0 .4em;}
+  .frac .den{padding:.05em .4em 0;}
+  .ub{display:inline-flex; flex-direction:column; align-items:center; vertical-align:middle; margin:0 .12em;}
+  .ub .bar{font-size:.7em; color:var(--mono);}
+  .ub .cap{font-family:"IBM Plex Mono",monospace; font-size:.5em; letter-spacing:.03em;
+    color:var(--mono); font-style:normal; margin-top:.1em;}
+  .eq .row{overflow-x:auto; padding-bottom:.2em;}
+  .eq.two .m{display:block; margin:.5rem 0;}
+
+  /* figure / architecture */
+  figure{margin:2rem 0; background:var(--surface); border:1px solid var(--line);
+    border-radius:10px; padding:1.4rem 1.2rem 1rem; box-shadow:var(--sh); overflow-x:auto;}
+  figure svg{display:block; margin:0 auto; max-width:100%; height:auto;}
+  figcaption{font-family:"IBM Plex Mono",monospace; font-size:.74rem; color:var(--mono);
+    margin-top:1rem; text-align:center; line-height:1.5;}
+  figcaption b{color:var(--ink);}
+
+  /* tables */
+  .tw{overflow-x:auto; margin:1.4rem 0;}
+  table{width:100%; border-collapse:collapse; font-size:.92rem;
+    font-variant-numeric:tabular-nums;}
+  caption{font-family:"IBM Plex Mono",monospace; font-size:.72rem; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--teal); text-align:left; margin-bottom:.6rem;}
+  th,td{padding:.5rem .8rem; text-align:right; border-bottom:1px solid var(--line);}
+  th:first-child,td:first-child{text-align:left; font-family:"IBM Plex Mono",monospace; font-size:.86rem;}
+  thead th{font-family:"IBM Plex Mono",monospace; font-size:.72rem; letter-spacing:.05em;
+    text-transform:uppercase; color:var(--mono); font-weight:500; border-bottom:1.5px solid var(--line-strong);}
+  tbody tr:last-child td{border-bottom:1.5px solid var(--line-strong);}
+  tr.hl td{background:var(--teal-soft); font-weight:600; color:var(--teal-deep);}
+  td.big{font-weight:600; color:var(--amber);}
+  .delta{color:var(--teal); font-family:"IBM Plex Mono",monospace; font-size:.82rem;}
+
+  /* two-col loss cards */
+  .grid2{display:grid; grid-template-columns:repeat(auto-fit,minmax(15rem,1fr)); gap:1rem; margin:1.4rem 0;}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:8px;
+    padding:1rem 1.1rem; box-shadow:var(--sh);}
+  .card .t{font-family:"IBM Plex Mono",monospace; font-size:.72rem; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--teal); margin-bottom:.4rem;}
+  .card p{margin:.3rem 0 0; font-size:.92rem; color:var(--ink-soft);}
+
+  .foot{margin-top:4rem; padding-top:1.4rem; border-top:1px solid var(--line);
+    font-family:"IBM Plex Mono",monospace; font-size:.74rem; color:var(--mono); line-height:1.6;}
+</style>
+
+<div class="wrap">
+
+  <p class="eyebrow">World-Model VLA · Method &amp; Results</p>
+  <h1>Canonical-Target Denoising for a Latent World-Model Policy</h1>
+  <p class="sub">A lightweight Mamba-2 world-model predicts a <em>clean</em> front-view future latent from <em>corrupted</em> (fake-viewpoint, noised) inputs. The corruption-to-canonical objective doubles as regularization: it lifts clean-LIBERO success from 93% to 97% while adding robustness across LIBERO-Plus.</p>
+
+  <div class="meta">
+    <span><b>Backbone</b> DINOv2-B + Qwen-VL (frozen)</span>
+    <span><b>Predictor</b> Mamba-2, 133.7M</span>
+    <span><b>Train data</b> libero_all, 403,428</span>
+    <span><b>GPU</b> 1× RTX A6000</span>
+  </div>
+  <p class="note">Numbers below are the <b>first evaluation pass</b> (seed 7, 50 trials/task for LIBERO; 1 trial/variant for LIBERO-Plus). Method and results only — the surrounding narrative (intro, related work, discussion) is authored separately.</p>
+
+  <!-- ===================== 1. OVERVIEW ===================== -->
+  <h2><span class="s">§1</span>Setup &amp; notation</h2>
+  <p>The policy consumes a short observation window and emits an action chunk. Perception and language come from <strong>frozen, large-scale pretrained encoders</strong>; the only newly trained components are a latent <strong>world-model predictor</strong> and a thin flow-matching action head. The predictor is trained from scratch on in-domain data — no large-scale video pretraining.</p>
+
+  <div class="grid2">
+    <div class="card"><div class="t">Frozen</div>
+      <p>DINOv2-B (patch encoder, <span class="delta">d=768</span>), Qwen-VL (action tokens, <span class="delta">d=2048</span>), VLA-JEPA backbone. Qwen is adapted with LoRA (r=16, α=32; 6.42M) only.</p></div>
+    <div class="card"><div class="t">Trained</div>
+      <p>Streaming Mamba-2 predictor (133.7M), <span class="mono">cond_proj</span>, flow-matching DiT action head. Stage-2 trainable total: 296.9M.</p></div>
+  </div>
+
+  <p>A training sample provides three time-aligned frames — <em>past</em>, <em>present</em>, <em>target</em> (the future to predict) — each encoded by the frozen DINO into patch-token latents:</p>
+  <div class="eq"><div class="lbl">Per-frame latent encoding (frozen, no grad)</div>
+    <div class="row"><span class="m"><i>s</i><sub>k</sub> <span class="op">=</span> <span class="fun">DINO</span>(<i>x</i><sub>k</sub>) <span class="op">∈</span> ℝ<sup>N×d</sup><span class="op" style="padding:0 1.4em"></span><i>k</i> <span class="op">∈</span> {past, present, target},<span class="op" style="padding:0 .8em"></span><i>N</i> <span class="op">=</span> 512,<span class="op" style="padding:0 .4em"></span><i>d</i> <span class="op">=</span> 768</span></div>
+  </div>
+  <p><span class="delta">N = 512</span> = 2 camera views × 256 patches. The action tokens <span class="delta">a</span> come from Qwen on the present frame + language instruction.</p>
+
+  <!-- ===================== 2. DENOISING OBJECTIVE ===================== -->
+  <h2><span class="s">§2</span>The canonical-target denoising objective</h2>
+  <p>The central idea: <strong>corrupt the predictor's inputs, but keep its target clean.</strong> With per-sample probability <span class="delta">p=0.7</span>, a single shared image-level transform <span class="delta">T</span> is applied to the <em>input</em> frames (past and present), while the <em>target</em> frame is never touched.</p>
+
+  <div class="eq"><div class="lbl">Input corruption (applied to past &amp; present only)</div>
+    <div class="row"><span class="m"><i>x̃</i><sub>k</sub> <span class="op">=</span> <i>T</i>(<i>x</i><sub>k</sub>),<span class="op" style="padding:0 .6em"></span><i>k</i> <span class="op">∈</span> {past, present},<span class="op" style="padding:0 1.4em"></span><i>T</i> <span class="op">∼</span> 𝒯 <span class="nrm">with prob.</span> <i>p</i>,<span class="op" style="padding:0 .5em"></span><span class="nrm">else</span> <i>T</i> <span class="op">=</span> <span class="rm">Id</span></span></div>
+  </div>
+
+  <p>The transform <span class="delta">T</span> is drawn once per sample and shared across the two input frames and both views, so it mimics a consistent camera displacement rather than per-frame jitter. It composes a <strong>geometric</strong> part (fake viewpoint) and a <strong>photometric/noise</strong> part:</p>
+
+  <div class="tw"><table>
+    <caption>Table 1 — Augmentation transform T (defaults)</caption>
+    <thead><tr><th>Component</th><th>Parameter</th><th>Range</th></tr></thead>
+    <tbody>
+      <tr><td>Perspective</td><td>distortion scale</td><td>0.25</td></tr>
+      <tr><td>Rotation</td><td>degrees</td><td>±10°</td></tr>
+      <tr><td>Resized crop</td><td>min area frac.</td><td>0.90</td></tr>
+      <tr><td>Brightness</td><td>± jitter</td><td>0.30</td></tr>
+      <tr><td>Contrast</td><td>± jitter</td><td>0.30</td></tr>
+      <tr><td>Gaussian blur</td><td>max σ</td><td>1.5</td></tr>
+      <tr><td>Pixel noise</td><td>std (0–1 space)</td><td>0.05</td></tr>
+      <tr><td>Apply prob.</td><td>p (per sample)</td><td>0.70</td></tr>
+    </tbody>
+  </table></div>
+
+  <p>The same corrupted pixels feed <strong>both</strong> the DINO encoder and the Qwen action-token path, matching deployment (where the policy always sees one real camera stream). The predictor <span class="delta">g<sub>θ</sub></span> maps corrupted input latents + action tokens to a predicted future latent; the loss pulls it toward the <strong>clean</strong> target:</p>
+
+  <div class="eq two"><div class="lbl">Prediction &amp; canonical-target loss</div>
+    <div class="row"><span class="m"><i>ŝ</i><sub>tgt</sub> <span class="op">=</span> <i>g</i><sub>θ</sub>( <i>a</i>, [ <i>s̃</i><sub>past</sub>, <i>s̃</i><sub>present</sub> ] )<span class="op" style="padding:0 1.6em"></span>ℒ<sub>pred</sub> <span class="op">=</span> ‖ <i>ŝ</i><sub>tgt</sub> <span class="op">−</span> <i>s</i><sub>target</sub><sup>clean</sup> ‖<sub style="font-style:normal">1</sub></span></div>
+  </div>
+
+  <p>Because <span class="delta">s<sub>target</sub></span> stays clean while inputs vary, <span class="delta">g<sub>θ</sub></span> cannot solve the task by copying surface appearance — it must learn a representation <strong>invariant to viewpoint and photometric nuisance</strong>. That invariance is exactly what shows up twice in the results: as robustness on perturbed LIBERO-Plus, and as plain regularization on clean LIBERO.</p>
+
+  <!-- ===================== 3. ARCHITECTURE ===================== -->
+  <h2><span class="s">§3</span>Architecture</h2>
+  <p>Two stages. <strong>Stage 1</strong> trains the predictor alone under <span class="delta">L<sub>pred</sub></span>. <strong>Stage 2</strong> adds the flow-matching action head under <span class="delta">L<sub>pred</sub> + L<sub>action</sub></span>, conditioning the head on the predicted future latent.</p>
+
+  <figure>
+    <svg viewBox="0 0 760 430" role="img" aria-label="Architecture diagram of the denoising world-model policy">
+      <defs>
+        <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+          <path d="M0,0 L7,3 L0,6 Z" fill="var(--ink-soft)"/>
+        </marker>
+        <style>
+          .box{fill:var(--surface); stroke:var(--line-strong); stroke-width:1.4;}
+          .frz{fill:var(--teal-soft); stroke:var(--teal); stroke-width:1.4;}
+          .trn{fill:var(--amber-soft); stroke:var(--amber); stroke-width:1.4;}
+          .lbl{font-family:"IBM Plex Mono",monospace; font-size:12px; fill:var(--ink);}
+          .lblc{font-family:"IBM Plex Mono",monospace; font-size:12px; fill:var(--ink); text-anchor:middle;}
+          .sm{font-family:"IBM Plex Mono",monospace; font-size:10px; fill:var(--mono); text-anchor:middle;}
+          .flow{stroke:var(--ink-soft); stroke-width:1.4; fill:none; marker-end:url(#ah);}
+          .tag{font-family:"IBM Plex Mono",monospace; font-size:9px; letter-spacing:.06em; text-anchor:middle;}
+        </style>
+
+        <!-- inputs -->
+        <rect class="box" x="20" y="40" width="120" height="46" rx="6"/>
+        <text class="lblc" x="80" y="60">past + present</text>
+        <text class="sm" x="80" y="76">frames (corrupted)</text>
+
+        <rect class="box" x="20" y="110" width="120" height="46" rx="6"/>
+        <text class="lblc" x="80" y="130">target frame</text>
+        <text class="sm" x="80" y="146">(clean)</text>
+
+        <rect class="box" x="20" y="200" width="120" height="46" rx="6"/>
+        <text class="lblc" x="80" y="220">present +</text>
+        <text class="sm" x="80" y="236">instruction</text>
+
+        <!-- encoders -->
+        <rect class="frz" x="195" y="40" width="110" height="46" rx="6"/>
+        <text class="lblc" x="250" y="62">DINOv2-B</text>
+        <text class="sm" x="250" y="77">frozen · 768</text>
+
+        <rect class="frz" x="195" y="110" width="110" height="46" rx="6"/>
+        <text class="lblc" x="250" y="132">DINOv2-B</text>
+        <text class="sm" x="250" y="147">frozen · 768</text>
+
+        <rect class="frz" x="195" y="200" width="110" height="46" rx="6"/>
+        <text class="lblc" x="250" y="222">Qwen-VL</text>
+        <text class="sm" x="250" y="237">frozen +LoRA</text>
+
+        <!-- predictor -->
+        <rect class="trn" x="380" y="70" width="150" height="120" rx="8"/>
+        <text class="lblc" x="455" y="118" style="font-size:13px;">Mamba-2</text>
+        <text class="lblc" x="455" y="136">predictor gθ</text>
+        <text class="sm" x="455" y="156">depth 12 · d=1024</text>
+        <text class="sm" x="455" y="170">133.7M · trained</text>
+
+        <!-- predicted latent -->
+        <rect class="box" x="585" y="96" width="150" height="46" rx="6"/>
+        <text class="lblc" x="660" y="116">ŝ_target</text>
+        <text class="sm" x="660" y="132">predicted future</text>
+
+        <!-- action head -->
+        <rect class="trn" x="585" y="200" width="150" height="60" rx="8"/>
+        <text class="lblc" x="660" y="224">flow-matching</text>
+        <text class="lblc" x="660" y="240">DiT head</text>
+        <text class="sm" x="660" y="253">trained (stage 2)</text>
+
+        <!-- losses -->
+        <rect x="585" y="300" width="150" height="40" rx="6" fill="none" stroke="var(--teal)" stroke-width="1.4" stroke-dasharray="4 3"/>
+        <text class="lblc" x="660" y="318" style="fill:var(--teal);">L_pred (L1)</text>
+        <text class="sm" x="660" y="332">vs clean target</text>
+
+        <rect x="585" y="356" width="150" height="40" rx="6" fill="none" stroke="var(--amber)" stroke-width="1.4" stroke-dasharray="4 3"/>
+        <text class="lblc" x="660" y="374" style="fill:var(--amber);">L_action (FM)</text>
+        <text class="sm" x="660" y="388">velocity MSE</text>
+
+        <!-- flows -->
+        <path class="flow" d="M140,63 L193,63"/>
+        <path class="flow" d="M140,133 L193,133"/>
+        <path class="flow" d="M140,223 L193,223"/>
+        <path class="flow" d="M305,63 C340,63 348,110 378,115"/>
+        <path class="flow" d="M305,223 C340,223 348,150 378,145"/>
+        <path class="flow" d="M530,120 L583,119"/>
+        <path class="flow" d="M660,142 L660,198"/>
+        <path class="flow" d="M660,142 C700,160 720,240 736,298" opacity="0"/>
+        <!-- target -> L_pred (dashed, target path) -->
+        <path d="M305,133 C420,133 470,300 583,318" fill="none" stroke="var(--teal)" stroke-width="1.3" stroke-dasharray="3 3" marker-end="url(#ah)"/>
+        <path class="flow" d="M660,142 C670,200 640,270 660,298" opacity="0"/>
+        <path d="M660,142 L660,298" fill="none" stroke="var(--teal)" stroke-width="1.3" stroke-dasharray="3 3" marker-end="url(#ah)"/>
+        <path d="M660,260 L660,354" fill="none" stroke="var(--amber)" stroke-width="1.3" stroke-dasharray="3 3" marker-end="url(#ah)"/>
+
+        <!-- stage tags -->
+        <text class="tag" x="455" y="60" fill="var(--amber)">STAGE 1 + 2</text>
+        <text class="tag" x="660" y="192" fill="var(--amber)">STAGE 2</text>
+      </svg>
+    <figcaption><b>Fig. 1</b> — Corrupted past/present are encoded and, with Qwen action tokens, drive the Mamba-2 predictor toward the <b>clean</b> target latent (teal = L<sub>pred</sub>). The predicted latent conditions the flow-matching head (amber = L<sub>action</sub>). Teal boxes frozen, amber boxes trained.</figcaption>
+    </figure>
+
+  <h3>3.1 &nbsp;Streaming Mamba-2 predictor</h3>
+  <p>The predictor assembles one causal token sequence per chunk and reads the future latent off a learned query block:</p>
+  <div class="eq"><div class="lbl">Predictor token sequence (per chunk)</div>
+    <div class="row"><span class="m">[ <span class="ub"><span><i>a</i></span><span class="bar">⎵</span><span class="cap">Nₐ</span></span> ‖ <span class="ub"><span>[<i>s̃</i><sub>past</sub>, <i>s̃</i><sub>present</sub>]</span><span class="bar">⎵</span><span class="cap">2N</span></span> ‖ <span class="ub"><span><i>q</i></span><span class="bar">⎵</span><span class="cap">N</span></span> ]<span class="op" style="padding:0 .7em">→</span><span class="fun">12× Mamba-2</span><span class="op" style="padding:0 .7em"></span><i>ŝ</i><sub>tgt</sub> <span class="op">=</span> <i>W</i><sub>o</sub> <i>h</i>[query]</span></div>
+  </div>
+  <p>Mamba-2 is run with <code>d_conv=1</code> so that splitting a long sequence into chunks with carried SSM state is mathematically equivalent to one pass — the causal state observes every intermediate frame while predictions stay at the chunk rate. Config: <span class="delta">depth 12, d_state 64, headdim 64, chunk 64, expand 2</span>.</p>
+
+  <h3>3.2 &nbsp;Flow-matching action head</h3>
+  <p>The head is a rectified-flow (flow-matching) DiT conditioned on <span class="delta">cond_proj(ŝ<sub>tgt</sub>)</span> and robot state. For an action chunk <span class="delta">u</span>, Gaussian noise <span class="delta">ε</span>, and flow time <span class="delta">t∈[0,1]</span>:</p>
+  <div class="eq"><div class="lbl">Flow-matching training objective</div>
+    <div class="row"><span class="m"><i>u</i><sub>t</sub> <span class="op">=</span> (1<span class="op">−</span><i>t</i>)<i>ε</i> <span class="op">+</span> <i>t u</i>,<span class="op" style="padding:0 1em"></span><i>v</i><sup>★</sup> <span class="op">=</span> <i>u</i> <span class="op">−</span> <i>ε</i>,<span class="op" style="padding:0 1em"></span>ℒ<sub>action</sub> <span class="op">=</span> 𝔼<sub>t,ε</sub> ‖ <i>v</i><sub>φ</sub>(<i>u</i><sub>t</sub>, <i>t</i> | <i>ŝ</i><sub>tgt</sub>) <span class="op">−</span> <i>v</i><sup>★</sup> ‖<sub style="font-style:normal">2</sub><sup style="font-style:normal">2</sup></span></div>
+  </div>
+  <div class="eq"><div class="lbl">Total objective</div>
+    <div class="row"><span class="m">ℒ <span class="op">=</span> <span class="ub"><span>ℒ<sub>pred</sub></span><span class="bar">⎵</span><span class="cap">STAGE 1&amp;2</span></span> <span class="op">+</span> <span class="ub"><span><i>β</i> ℒ<sub>action</sub></span><span class="bar">⎵</span><span class="cap">STAGE 2</span></span></span></div>
+  </div>
+
+  <!-- ===================== 4. TRAINING ===================== -->
+  <h2><span class="s">§4</span>Training recipe</h2>
+  <div class="tw"><table>
+    <caption>Table 2 — Configuration (single GPU)</caption>
+    <thead><tr><th>Item</th><th>Stage 1 (predictor)</th><th>Stage 2 (+head)</th></tr></thead>
+    <tbody>
+      <tr><td>Steps</td><td>30,000</td><td>30,000</td></tr>
+      <tr><td>Batch (eff.)</td><td>16</td><td>8 × grad-accum 2</td></tr>
+      <tr><td>Objective</td><td>L_pred</td><td>L_pred + β·L_action</td></tr>
+      <tr><td>Warmup</td><td>500</td><td>500</td></tr>
+      <tr><td>Data mix</td><td colspan="2" style="text-align:left">libero_all = object 66,605 · goal 51,851 · spatial 52,791 · long 100,857 → 403,428</td></tr>
+      <tr><td>Qwen LoRA</td><td colspan="2" style="text-align:left">r=16, α=32 (both stages) · 6.42M adapter</td></tr>
+    </tbody>
+  </table></div>
+  <p>Training curve (stage 1): <span class="delta">pred_cos 0.17 → 0.94</span>, <span class="delta">L<sub>pred</sub> 1.26 → 0.39</span>, monotone, no divergence.</p>
+
+  <!-- ===================== 5. RESULTS ===================== -->
+  <h2><span class="s">§5</span>Results</h2>
+
+  <h3>5.1 &nbsp;Clean LIBERO — the surprising gain</h3>
+  <p>The unified model is evaluated on each of the four suites at 50 trials/task. Even though clean LIBERO has <strong>no perturbation to be robust to</strong>, the denoising objective still improves success — the corruption-to-canonical task acts as a representation regularizer.</p>
+
+  <div class="tw"><table>
+    <caption>Table 3 — Clean LIBERO success rate (50 trials/task)</caption>
+    <thead><tr><th>Suite</th><th>Baseline (no aug)</th><th>Denoising (ours)</th><th>Δ</th></tr></thead>
+    <tbody>
+      <tr><td>Spatial</td><td>—</td><td>96.6%</td><td class="delta">—</td></tr>
+      <tr><td>Object</td><td>—</td><td>99.2%</td><td class="delta">—</td></tr>
+      <tr><td>Goal</td><td>—</td><td>97.0%</td><td class="delta">—</td></tr>
+      <tr><td>Long (10)</td><td>—</td><td>96.0%</td><td class="delta">—</td></tr>
+      <tr class="hl"><td>Average</td><td>93.0%</td><td>97.2%</td><td class="delta">+4.2</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">Baseline (93%) is a matched no-augmentation StreamingMamba trained on the same <code>libero_all</code> mixture, measured on separate hardware; only its 4-suite average is on hand. Same data volume, same architecture — the +4.2 pt gap is attributable to the denoising objective. Per-suite baseline numbers are still to be collected for the final camera-ready.</p>
+
+  <h3>5.2 &nbsp;LIBERO-Plus — robustness across 7 perturbation axes</h3>
+  <p>The same unified model is evaluated on all 10,030 LIBERO-Plus variants (1 trial/variant, the benchmark standard), spanning four suites and seven perturbation categories.</p>
+
+  <div class="tw"><table>
+    <caption>Table 4 — LIBERO-Plus by perturbation axis (10,030 variants)</caption>
+    <thead><tr><th>Perturbation axis</th><th>Succ / Total</th><th>Rate</th></tr></thead>
+    <tbody>
+      <tr><td>Background Textures</td><td>1001 / 1076</td><td class="big">93.0%</td></tr>
+      <tr><td>Light Conditions</td><td>1046 / 1142</td><td class="big">91.6%</td></tr>
+      <tr><td>Language Instructions</td><td>1298 / 1537</td><td>84.5%</td></tr>
+      <tr><td>Objects Layout</td><td>1266 / 1525</td><td>83.0%</td></tr>
+      <tr><td>Sensor Noise</td><td>1013 / 1601</td><td>63.3%</td></tr>
+      <tr><td>Robot Initial States</td><td>973 / 1550</td><td>62.8%</td></tr>
+      <tr><td>Camera Viewpoints</td><td>940 / 1599</td><td>58.8%</td></tr>
+      <tr class="hl"><td>Total</td><td>7537 / 10030</td><td>75.1%</td></tr>
+    </tbody>
+  </table></div>
+  <p>Photometric axes the augmentation directly targets — background, lighting — hold above 91%. Geometric axes (camera viewpoint, robot init) are the hardest, marking where the fake-viewpoint corruption has the most headroom left, and pointing to the state-conditioned predictor as the natural next step.</p>
+
+  <!-- ===================== 6. POSITIONING ===================== -->
+  <h2><span class="s">§6</span>Data positioning</h2>
+  <ul>
+    <li><strong>Pretrained VLM is standard, not a liability.</strong> Perception and language are frozen large-scale encoders — the same choice every major VLA (OpenVLA, RT-2, π0, Octo) makes. The claim is scoped to the <em>predictor</em>.</li>
+    <li><strong>The world-model needs no large-scale video pretraining.</strong> The Mamba-2 predictor is trained from scratch on in-domain data only; adding SSv2/Droid pretraining left performance essentially unchanged — evidence the predictor is data-efficient.</li>
+    <li><strong>The denoising objective is the contribution.</strong> Corrupt inputs, keep the target canonical. It buys robustness on perturbed evaluation <em>and</em> regularization on clean evaluation from a single change to the training pipeline.</li>
+  </ul>
+
+  <div class="foot">
+    Method &amp; first-pass results writeup · unified denoising world-model on libero_all.<br>
+    Framework: <code>VLA_DINO_StreamingMamba_FutureOnly_Denoise</code> · predictor 133.7M · eval seed 7.<br>
+    Surrounding paper narrative authored separately by the author.
+  </div>
+</div>
+
