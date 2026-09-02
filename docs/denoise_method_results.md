@@ -137,22 +137,39 @@ The unified model is evaluated on each of the four suites at 50 trials/task. Eve
 
 ### 5.2 LIBERO-Plus — robustness across 7 perturbation axes
 
-The same unified model on all 10,030 LIBERO-Plus variants (1 trial/variant, benchmark standard), across four suites and seven perturbation categories.
+The same unified model on all 10,030 LIBERO-Plus variants (1 trial/variant, benchmark standard), broken out by suite × perturbation category.
 
-| Perturbation axis | Succ / Total | Rate |
-|---|---:|---:|
-| Background Textures | 1001 / 1076 | **93.0%** |
-| Light Conditions | 1046 / 1142 | **91.6%** |
-| Language Instructions | 1298 / 1537 | 84.5% |
-| Objects Layout | 1266 / 1525 | 83.0% |
-| Sensor Noise | 1013 / 1601 | 63.3% |
-| Robot Initial States | 973 / 1550 | 62.8% |
-| Camera Viewpoints | 940 / 1599 | 58.8% |
-| **Total** | **7537 / 10030** | **75.1%** |
+| Perturbation axis | Spatial | Object | Goal | Long | All |
+|---|---:|---:|---:|---:|---:|
+| Background Textures | 96.9% | 99.2% | 96.1% | 81.3% | **93.0%** |
+| Light Conditions | 99.0% | 99.7% | 90.7% | 75.9% | **91.6%** |
+| Language Instructions | 86.4% | 89.8% | 75.9% | 86.7% | 84.5% |
+| Objects Layout | 94.5% | 87.3% | 68.7% | 82.7% | 83.0% |
+| Sensor Noise | 69.5% | 73.0% | 70.7% | 43.0% | 63.3% |
+| Robot Initial States | 70.6% | 48.0% | 68.0% | 65.4% | 62.8% |
+| Camera Viewpoints | 72.1% | 56.3% | 69.1% | 39.1% | 58.8% |
+| **Suite total** | **83.3%** | **76.8%** | **75.4%** | **65.4%** | **75.1%** |
 
-*Table 4 — LIBERO-Plus by perturbation axis (10,030 variants).*
+*Table 4 — LIBERO-Plus: success rate by suite × perturbation axis (10,030 variants).*
 
-Photometric axes the augmentation directly targets — background, lighting — hold above 91%. Geometric axes (camera viewpoint, robot init) are the hardest, marking where the fake-viewpoint corruption has the most headroom left, and pointing to a state-conditioned predictor as the natural next step.
+Photometric axes the augmentation directly targets — background, lighting — hold above 91% overall. Geometric axes (camera viewpoint, robot init) are the hardest, and the **Long** suite is consistently the weakest column (65.4% total) — long-horizon tasks compound perturbation error. This marks where the fake-viewpoint corruption has the most headroom left, pointing to a state-conditioned predictor as the natural next step.
+
+### 5.3 Comparison with prior VLA methods
+
+Placed against published LIBERO results. **Our two rows are final**; the prior-method rows are a skeleton — fill each cell from the cited paper's own LIBERO table (mind their trial count / checkpoint-selection convention, which varies by paper).
+
+| Method | Spatial | Object | Goal | Long | Average |
+|---|---:|---:|---:|---:|---:|
+| OpenVLA | — | — | — | — | — |
+| Octo | — | — | — | — | — |
+| π0 (pi-zero) | — | — | — | — | — |
+| MDT / others… | — | — | — | — | — |
+| Baseline (ours, no aug) | — | — | — | — | 93.0% |
+| **Denoising (ours)** | **96.6%** | **99.2%** | **97.0%** | **96.0%** | **97.2%** |
+
+*Table 5 — LIBERO success rate vs prior work.*
+
+> **Author to complete.** Prior-method cells are intentionally left blank — SOTA numbers should be copied from each paper's own LIBERO table rather than approximated. Only the two "ours" rows and the baseline average (93.0%) are our own measured values; per-suite baseline numbers are still to be collected.
 
 ---
 

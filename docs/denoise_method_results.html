@@ -339,20 +339,37 @@
   <p>The same unified model is evaluated on all 10,030 LIBERO-Plus variants (1 trial/variant, the benchmark standard), spanning four suites and seven perturbation categories.</p>
 
   <div class="tw"><table>
-    <caption>Table 4 — LIBERO-Plus by perturbation axis (10,030 variants)</caption>
-    <thead><tr><th>Perturbation axis</th><th>Succ / Total</th><th>Rate</th></tr></thead>
+    <caption>Table 4 — LIBERO-Plus: success rate by suite × perturbation axis (10,030 variants)</caption>
+    <thead><tr><th>Perturbation axis</th><th>Spatial</th><th>Object</th><th>Goal</th><th>Long</th><th>All</th></tr></thead>
     <tbody>
-      <tr><td>Background Textures</td><td>1001 / 1076</td><td class="big">93.0%</td></tr>
-      <tr><td>Light Conditions</td><td>1046 / 1142</td><td class="big">91.6%</td></tr>
-      <tr><td>Language Instructions</td><td>1298 / 1537</td><td>84.5%</td></tr>
-      <tr><td>Objects Layout</td><td>1266 / 1525</td><td>83.0%</td></tr>
-      <tr><td>Sensor Noise</td><td>1013 / 1601</td><td>63.3%</td></tr>
-      <tr><td>Robot Initial States</td><td>973 / 1550</td><td>62.8%</td></tr>
-      <tr><td>Camera Viewpoints</td><td>940 / 1599</td><td>58.8%</td></tr>
-      <tr class="hl"><td>Total</td><td>7537 / 10030</td><td>75.1%</td></tr>
+      <tr><td>Background Textures</td><td>96.9%</td><td>99.2%</td><td>96.1%</td><td>81.3%</td><td class="big">93.0%</td></tr>
+      <tr><td>Light Conditions</td><td>99.0%</td><td>99.7%</td><td>90.7%</td><td>75.9%</td><td class="big">91.6%</td></tr>
+      <tr><td>Language Instructions</td><td>86.4%</td><td>89.8%</td><td>75.9%</td><td>86.7%</td><td>84.5%</td></tr>
+      <tr><td>Objects Layout</td><td>94.5%</td><td>87.3%</td><td>68.7%</td><td>82.7%</td><td>83.0%</td></tr>
+      <tr><td>Sensor Noise</td><td>69.5%</td><td>73.0%</td><td>70.7%</td><td>43.0%</td><td>63.3%</td></tr>
+      <tr><td>Robot Initial States</td><td>70.6%</td><td>48.0%</td><td>68.0%</td><td>65.4%</td><td>62.8%</td></tr>
+      <tr><td>Camera Viewpoints</td><td>72.1%</td><td>56.3%</td><td>69.1%</td><td>39.1%</td><td>58.8%</td></tr>
+      <tr class="hl"><td>Suite total</td><td>83.3%</td><td>76.8%</td><td>75.4%</td><td>65.4%</td><td>75.1%</td></tr>
     </tbody>
   </table></div>
-  <p>Photometric axes the augmentation directly targets — background, lighting — hold above 91%. Geometric axes (camera viewpoint, robot init) are the hardest, marking where the fake-viewpoint corruption has the most headroom left, and pointing to the state-conditioned predictor as the natural next step.</p>
+  <p>Photometric axes the augmentation directly targets — background, lighting — hold above 91% overall. Geometric axes (camera viewpoint, robot init) are the hardest, and the <strong>Long</strong> suite is consistently the weakest column (65.4% total) — the long-horizon tasks compound perturbation error. This marks where the fake-viewpoint corruption has the most headroom left, pointing to a state-conditioned predictor as the natural next step.</p>
+
+  <h3>5.3 &nbsp;Comparison with prior VLA methods</h3>
+  <p>Placed against published LIBERO results. <strong>Our two rows are final</strong>; the prior-method rows are a skeleton — fill each cell from the cited paper's own LIBERO table (note their trial count / checkpoint-selection convention, which varies by paper).</p>
+
+  <div class="tw"><table>
+    <caption>Table 5 — LIBERO success rate vs prior work (fill prior rows from sources)</caption>
+    <thead><tr><th>Method</th><th>Spatial</th><th>Object</th><th>Goal</th><th>Long</th><th>Average</th></tr></thead>
+    <tbody>
+      <tr><td>OpenVLA</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td></tr>
+      <tr><td>Octo</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td></tr>
+      <tr><td>π0 (pi-zero)</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td></tr>
+      <tr><td>MDT / others…</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td></tr>
+      <tr><td>Baseline (ours, no aug)</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td><td class="tbd">—</td><td>93.0%</td></tr>
+      <tr class="hl"><td>Denoising (ours)</td><td>96.6%</td><td>99.2%</td><td>97.0%</td><td>96.0%</td><td>97.2%</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note"><b>Author to complete.</b> Prior-method cells are placeholders — the SOTA numbers were intentionally not filled in to avoid citing approximate figures; copy them from each paper's LIBERO table. Only the two "ours" rows and the baseline average (93.0%) are our own measured values. Per-suite baseline numbers are still to be collected.</p>
 
   <!-- ===================== 6. POSITIONING ===================== -->
   <h2><span class="s">§6</span>Data positioning</h2>
