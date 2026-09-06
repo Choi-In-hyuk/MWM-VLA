@@ -171,6 +171,36 @@ Placed against published LIBERO results. **Our two rows are final**; the prior-m
 
 > **Author to complete.** Prior-method cells are intentionally left blank — SOTA numbers should be copied from each paper's own LIBERO table rather than approximated. Only the two "ours" rows and the baseline average (93.0%) are our own measured values; per-suite baseline numbers are still to be collected.
 
+### 5.4 Ablation — injecting robot state into the predictor
+
+We tested whether making the predictor *use proprioception* helps. In the main model `robot_state` reaches only the action head, where it is redundant with the images and gets ignored (dropping it does not change performance). The **StateInit** variant instead (i) encodes the present `robot_state` into the Mamba SSM's per-layer **initial hidden state**, and (ii) adds an auxiliary loss that predicts the **future-state delta** $(s_{t+H}-s_t)/\sigma$ from the predicted future latent — forcing the predictor to carry the proprioceptive signal. Everything else (denoising, backbone, data, recipe) is identical.
+
+**Clean LIBERO (50 trials/task):**
+
+| Suite | Denoising | StateInit | Δ |
+|---|---:|---:|---:|
+| Spatial | 96.6% | 96.6% | 0.0 |
+| Object | 99.2% | 99.4% | +0.2 |
+| Goal | 97.0% | 97.2% | +0.2 |
+| Long (10) | 96.0% | 91.2% | **−4.8** |
+| **Average** | **97.2%** | **96.1%** | **−1.1** |
+
+**LIBERO-Plus (6 axes, Sensor Noise excluded, matched):**
+
+| Perturbation axis | Denoising | StateInit | Δ |
+|---|---:|---:|---:|
+| Robot Initial States | 62.8% | 65.3% | **+2.5** |
+| Camera Viewpoints | 58.8% | 60.2% | **+1.4** |
+| Light Conditions | 91.6% | 91.4% | −0.2 |
+| Objects Layout | 83.0% | 82.5% | −0.5 |
+| Language Instructions | 84.5% | 82.1% | −2.3 |
+| Background Textures | 93.0% | 89.3% | −3.7 |
+| **6-axis total** | **77.4%** | **77.1%** | **−0.3** |
+
+*Table 6 — State-injection ablation. StateInit improves the geometric axes it targets (robot-init, camera) but loses on photometric/semantic axes and long-horizon clean tasks.*
+
+**Finding — a negative result that supports the main model.** The hypothesis holds in *direction*: injecting present state and forcing future-state prediction raises exactly the geometric axes it targets (Robot-Init +2.5, Camera +1.4). But the gain is small and offset — photometric/semantic axes drop (Background −3.7, Language −2.3) and long-horizon clean tasks fall (−4.8), so the 6-axis total is flat (−0.3) and clean-LIBERO average is slightly worse (−1.1). Diverting predictor capacity to state prediction trades off future-latent quality (`pred_cos` 0.94 → 0.88). **Conclusion:** the denoising objective already yields representations robust enough that explicit state injection buys no net gain — the main model needs no proprioceptive branch.
+
 ---
 
 ## §6 Data positioning

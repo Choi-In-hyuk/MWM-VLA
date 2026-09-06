@@ -342,7 +342,9 @@ def main():
     # ---- resume full training state (model + opt + step + rng), if provided
     start_step = 0
     if args.resume_state:
-        ckpt = torch.load(args.resume_state, map_location="cpu")
+        # weights_only=False: our own trusted checkpoint; it stores numpy RNG
+        # state which PyTorch 2.6's default weights_only=True refuses to unpickle.
+        ckpt = torch.load(args.resume_state, map_location="cpu", weights_only=False)
         missing, unexpected = model_root.load_state_dict(ckpt["model"], strict=False)
         opt.load_state_dict(ckpt["optimizer"])
         start_step = int(ckpt["step"])

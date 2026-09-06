@@ -60,8 +60,17 @@ class VLA_DINO_StreamingMamba_FutureOnly_Denoise_StateInit(
         mcfg = getattr(config.framework, "mamba_wm", None)
         get = (lambda k, d: getattr(mcfg, k, d)) if mcfg is not None else (lambda k, d: d)
         self.robot_state_dim = int(get("robot_state_dim", 8))
-        self.state_aux_weight = float(get("state_aux_weight", 0.7))   # lambda for L_state
+        # lambda for L_state. Kept below 1 so the DINO future prediction (L_pred)
+        # stays the primary objective; the normalized-delta L_state now sits at
+        # ~1-3 magnitude (vs the old ~0.002), so 0.5 gives it real but secondary
+        # pressure rather than letting state prediction dominate the loss.
+        self.state_aux_weight = float(get("state_aux_weight", 0.5))   # lambda for L_state
         self.state_init_scale = float(get("state_init_scale", 1.0))  # optional overall gain
+        # Typical |future - present| state delta over the prediction horizon
+        # (measured ~0.022 mean-abs on LIBERO). We divide the delta target by
+        # this so the normalized target is ~unit-scale and smooth_l1 gradients
+        # are meaningful instead of vanishing on a tiny raw delta.
+        self.state_delta_scale = float(get("state_delta_scale", 0.03))
 
         # Predictor already exists (built in StreamingMamba.__init__ via super()).
         # Build state modules NOW so they are visible to the optimizer (which
@@ -182,7 +191,15 @@ class VLA_DINO_StreamingMamba_FutureOnly_Denoise_StateInit(
             np.stack([e["state_full"] for e in examples])
         ).to(device, dtype=torch.float32)                             # [B, 3, 8]
         r_present = states_all[:, 1]                                  # [B, 8]
-        r_future  = states_all[:, 2]                                  # [B, 8]  (L_state target)
+        r_future  = states_all[:, 2]                                  # [B, 8]
+        # L_state target = the CHANGE the robot undergoes, not the absolute
+        # future pose. Future pose ~= present pose (over ~7 frames the arm moves
+        # only ~4% of the state magnitude), so predicting absolute future is
+        # trivial ("copy present") and gives almost no learning pressure -- we
+        # saw L_state collapse to ~0.002. The delta (future - present) is the
+        # actual dynamics signal; normalizing by its typical scale makes the
+        # smooth_l1 magnitude meaningful so gradients don't vanish.
+        r_delta   = (r_future - r_present) / self.state_delta_scale   # [B, 8]
 
         # Qwen action tokens from the (possibly augmented) present frame
         batch_images = []
@@ -206,10 +223,12 @@ class VLA_DINO_StreamingMamba_FutureOnly_Denoise_StateInit(
         L_pred  = F.l1_loss(s_target_pred, s_target)
         cos_avg = F.cosine_similarity(s_target_pred, s_target, dim=-1).mean()
 
-        # (2) PRESSURE: predict FUTURE robot_state from predicted future latent
+        # (2) PRESSURE: predict the (normalized) future state DELTA from the
+        # predicted future latent. Forces the predictor to encode how the robot
+        # will move, which it can only do by using the injected present state.
         pooled = s_target_pred.mean(dim=1)                            # [B, dino_dim]
-        r_future_pred = self.state_pred_head(pooled.to(self.state_pred_head[0].weight.dtype))
-        L_state = F.smooth_l1_loss(r_future_pred, r_future.to(r_future_pred.dtype))
+        r_delta_pred = self.state_pred_head(pooled.to(self.state_pred_head[0].weight.dtype))
+        L_state = F.smooth_l1_loss(r_delta_pred, r_delta.to(r_delta_pred.dtype))
 
         w = self.loss_weights
         L_action = torch.zeros((), device=device)
