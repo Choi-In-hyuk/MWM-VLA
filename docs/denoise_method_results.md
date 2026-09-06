@@ -98,6 +98,28 @@ $$ u_t = (1-t)\varepsilon + t\,u,\qquad v^\star = u-\varepsilon,\qquad \mathcal{
 
 $$ \mathcal{L} = \underbrace{\mathcal{L}_{\text{pred}}}_{\text{stage 1 \& 2}} + \underbrace{\beta\,\mathcal{L}_{\text{action}}}_{\text{stage 2}} $$
 
+### 3.3 The three method variants
+
+All three share the same backbone, predictor, action head, data, and two-stage recipe. They form a clean inheritance chain — each variant is the previous one plus **one** change — which is what makes the comparisons apples-to-apples.
+
+```
+StreamingMamba  (Baseline)
+  └── FutureOnly            + action head conditions on ŝ_tgt only (drop s_present)
+        └── Denoise         + corrupt inputs, keep target clean  →  L_pred vs CLEAN   [MAIN]
+              └── StateInit  + robot_state → Mamba init state, + future-state-delta L_state   [ablation]
+```
+
+| Variant | What changes vs. its parent | Action-head conditioning | Predictor input | Extra loss |
+|---|---|---|---|---|
+| **Baseline** `StreamingMamba` | — | `cond_proj([s_present, ŝ_tgt])` (seq 2N) | clean past+present | — |
+| **FutureOnly** | action head sees only the predicted future | `cond_proj(ŝ_tgt)` (seq N) | clean past+present | — |
+| **Denoise** *(main)* | corrupt the predictor's inputs; target stays clean | `cond_proj(ŝ_tgt)` | **corrupted** past+present, clean target | — |
+| **StateInit** *(ablation)* | inject `robot_state` as Mamba initial hidden state | `cond_proj(ŝ_tgt)` | corrupted + **state-initialized SSM** | **L_state** (future-state delta) |
+
+- **Baseline → FutureOnly.** The action head is conditioned only on the world-model's *predicted* future latent $\hat{s}_{\text{tgt}}$, not concatenated with the present latent $s_{\text{present}}$. Rationale: under perturbation $s_{\text{present}}$ is corrupted; $\hat{s}_{\text{tgt}}$ is anchored to the clean training manifold, so it is a cleaner conditioning signal. The token sequence into `cond_proj` halves ($2N\to N$).
+- **FutureOnly → Denoise (main).** Apply a shared image-level corruption $T$ to the predictor's input frames (past, present) while the $L_{\text{pred}}$ target stays the clean future — the canonical-target denoising objective of §2. This is the only change that produced the +4.2 pt clean-LIBERO gain.
+- **Denoise → StateInit (ablation).** Encode present `robot_state` into the Mamba SSM's per-layer initial hidden state and add $L_{\text{state}}$ predicting the normalized future-state delta. Intended to make the predictor *use* proprioception; result is analyzed in §5.4.
+
 ---
 
 ## §4 Training recipe

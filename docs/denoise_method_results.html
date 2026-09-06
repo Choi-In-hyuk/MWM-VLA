@@ -300,6 +300,60 @@
     <div class="row"><span class="m">ℒ <span class="op">=</span> <span class="ub"><span>ℒ<sub>pred</sub></span><span class="bar">⎵</span><span class="cap">STAGE 1&amp;2</span></span> <span class="op">+</span> <span class="ub"><span><i>β</i> ℒ<sub>action</sub></span><span class="bar">⎵</span><span class="cap">STAGE 2</span></span></span></div>
   </div>
 
+  <h3>3.3 &nbsp;The three method variants</h3>
+  <p>All three share the same backbone, predictor, action head, data, and two-stage recipe. They form a clean inheritance chain — each variant is the previous one plus <strong>one</strong> change — which is what makes every comparison apples-to-apples.</p>
+
+  <figure>
+    <svg viewBox="0 0 720 232" role="img" aria-label="Inheritance chain of the four method variants">
+      <defs><style>
+        .vb{fill:var(--surface); stroke:var(--line-strong); stroke-width:1.4;}
+        .vmain{fill:var(--teal-soft); stroke:var(--teal); stroke-width:1.6;}
+        .vabl{fill:var(--amber-soft); stroke:var(--amber); stroke-width:1.4;}
+        .vt{font-family:"IBM Plex Mono",monospace; font-size:12.5px; fill:var(--ink); font-weight:600;}
+        .vd{font-family:"Source Serif 4",serif; font-size:11.5px; fill:var(--ink-soft);}
+        .vtag{font-family:"IBM Plex Mono",monospace; font-size:9px; letter-spacing:.06em;}
+        .vconn{stroke:var(--ink-soft); stroke-width:1.4; fill:none; marker-end:url(#va);}
+      </style>
+      <marker id="va" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+        <path d="M0,0 L7,3 L0,6 Z" fill="var(--ink-soft)"/></marker></defs>
+
+      <rect class="vb" x="14" y="16" width="200" height="42" rx="6"/>
+      <text class="vt" x="26" y="34">Baseline · StreamingMamba</text>
+      <text class="vd" x="26" y="50">action head sees [s_present, ŝ_tgt]</text>
+
+      <rect class="vb" x="70" y="76" width="220" height="42" rx="6"/>
+      <text class="vt" x="82" y="94">+ FutureOnly</text>
+      <text class="vd" x="82" y="110">cond = ŝ_tgt only (drop s_present)</text>
+
+      <rect class="vmain" x="126" y="136" width="250" height="42" rx="6"/>
+      <text class="vt" x="138" y="154">+ Denoise</text>
+      <text class="vd" x="138" y="170">corrupt inputs, target stays clean</text>
+      <text class="vtag" x="356" y="132" fill="var(--teal)" text-anchor="end">MAIN</text>
+
+      <rect class="vabl" x="182" y="196" width="290" height="42" rx="6" transform="translate(0,-8)"/>
+      <text class="vt" x="194" y="182">+ StateInit</text>
+      <text class="vd" x="194" y="198">robot_state → SSM init · +L_state (Δ)</text>
+      <text class="vtag" x="464" y="164" fill="var(--amber)" text-anchor="end">ABLATION</text>
+
+      <path class="vconn" d="M40,58 L40,74"/>
+      <path class="vconn" d="M96,118 L96,134"/>
+      <path class="vconn" d="M152,178 L152,186"/>
+    </svg>
+    <figcaption><b>Fig. 2</b> — Each variant adds exactly one change to its parent. Teal = the main model; amber = the ablation.</figcaption>
+  </figure>
+
+  <div class="tw"><table>
+    <caption>Table 5b — What differs between variants</caption>
+    <thead><tr><th>Variant</th><th>Change vs. parent</th><th>Action cond.</th><th>Predictor input</th><th>Extra loss</th></tr></thead>
+    <tbody>
+      <tr><td>Baseline</td><td style="text-align:left">—</td><td>[s_present, ŝ_tgt]</td><td>clean</td><td>—</td></tr>
+      <tr><td>FutureOnly</td><td style="text-align:left">head sees future only</td><td>ŝ_tgt</td><td>clean</td><td>—</td></tr>
+      <tr class="hl"><td>Denoise (main)</td><td style="text-align:left">corrupt inputs, clean target</td><td>ŝ_tgt</td><td>corrupted</td><td>—</td></tr>
+      <tr><td>StateInit (abl.)</td><td style="text-align:left">state → SSM init state</td><td>ŝ_tgt</td><td>corrupted +state</td><td>L_state (Δ)</td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>Baseline → FutureOnly:</strong> the action head is conditioned only on the world-model's predicted future latent, not concatenated with the present latent — under perturbation the present latent is corrupted, whereas the prediction is anchored to the clean manifold. <strong>FutureOnly → Denoise (main):</strong> the canonical-target corruption of §2 — the single change behind the +4.2 pt clean-LIBERO gain. <strong>Denoise → StateInit (ablation):</strong> inject present state into the SSM initial state + a future-state-delta loss; analyzed in §5.4.</p>
+
   <!-- ===================== 4. TRAINING ===================== -->
   <h2><span class="s">§4</span>Training recipe</h2>
   <div class="tw"><table>
